@@ -1,0 +1,85 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Trip {
+  id            String       @id @default(cuid())
+  date          DateTime     @default(now())
+  startAddress  String
+  endAddress    String
+  startLat      Float
+  startLng      Float
+  endLat        Float
+  endLng        Float
+  distance      Float
+  duration      Int
+  notes         String?
+  routeEncoded  String?
+  category      TripCategory @default(OTHER)
+  isFavorite    Boolean      @default(false)
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+  gasEntries    GasEntry[]
+}
+
+model GasEntry {
+  id             String   @id @default(cuid())
+  date           DateTime @default(now())
+  gallons        Float
+  pricePerGallon Float
+  totalCost      Float
+  paidBy         PaidBy
+  fuelType       FuelType @default(REGULAR)
+  stationName    String?
+  odometer       Float?
+  tripId         String?
+  trip           Trip?    @relation(fields: [tripId], references: [id])
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+}
+
+model Vehicle {
+  id        String   @id @default(cuid())
+  name      String
+  make      String?
+  model     String?
+  year      Int?
+  tankSize  Float?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Settings {
+  id            String @id @default(cuid())
+  monthlyBudget Float  @default(0)
+  distanceUnit  String @default("miles")
+  currency      String @default("USD")
+  theme         String @default("system")
+}
+
+enum PaidBy {
+  SELF
+  PARENTS
+}
+
+enum TripCategory {
+  COMMUTE
+  ERRAND
+  ROAD_TRIP
+  SCHOOL
+  WORK
+  LEISURE
+  OTHER
+}
+
+enum FuelType {
+  REGULAR
+  MIDGRADE
+  PREMIUM
+  DIESEL
+}
