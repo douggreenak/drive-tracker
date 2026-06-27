@@ -1,9 +1,30 @@
 import { prisma } from "@/lib/db";
 
 export async function GET() {
+  // Select only the columns the CSV writes — avoids the large routeEncoded column.
   const [trips, gasEntries] = await Promise.all([
-    prisma.trip.findMany({ orderBy: { date: "desc" } }),
-    prisma.gasEntry.findMany({ orderBy: { date: "desc" } }),
+    prisma.trip.findMany({
+      orderBy: { date: "desc" },
+      select: {
+        date: true,
+        startAddress: true,
+        endAddress: true,
+        distance: true,
+        category: true,
+      },
+    }),
+    prisma.gasEntry.findMany({
+      orderBy: { date: "desc" },
+      select: {
+        date: true,
+        gallons: true,
+        totalCost: true,
+        paidBy: true,
+        stationName: true,
+        odometer: true,
+        fuelType: true,
+      },
+    }),
   ]);
 
   let csv = "Type,Date,Details,Distance (mi),Gallons,Cost ($),Paid By,Category,Station,Odometer,Fuel Type\n";

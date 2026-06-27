@@ -33,10 +33,27 @@ export async function GET(request: NextRequest) {
   else if (sort === "duration") orderBy.duration = order;
   else orderBy.date = order;
 
+  // Select only the columns the web pages render — notably excluding the large
+  // `routeEncoded` polyline and the createdAt/updatedAt timestamps.
   const trips = await prisma.trip.findMany({
     where,
-    include: { gasEntries: true },
     orderBy,
+    select: {
+      id: true,
+      date: true,
+      startAddress: true,
+      endAddress: true,
+      startLat: true,
+      startLng: true,
+      endLat: true,
+      endLng: true,
+      distance: true,
+      duration: true,
+      notes: true,
+      category: true,
+      isFavorite: true,
+      gasEntries: { select: { totalCost: true, paidBy: true } },
+    },
   });
   return Response.json(trips);
 }

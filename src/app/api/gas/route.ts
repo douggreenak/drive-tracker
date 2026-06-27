@@ -26,7 +26,9 @@ export async function GET(request: NextRequest) {
 
   const gasEntries = await prisma.gasEntry.findMany({
     where,
-    include: { trip: true },
+    // The gas page only shows the linked trip's endpoints — avoid pulling the
+    // whole Trip row (including its large routeEncoded column) per entry.
+    include: { trip: { select: { startAddress: true, endAddress: true } } },
     orderBy,
   });
   return Response.json(gasEntries);

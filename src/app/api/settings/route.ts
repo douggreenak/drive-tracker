@@ -2,11 +2,12 @@ import { prisma } from "@/lib/db";
 import { NextRequest } from "next/server";
 
 export async function GET() {
-  let settings = await prisma.settings.findFirst();
-  if (!settings) {
-    settings = await prisma.settings.create({ data: {} });
-  }
-  const vehicles = await prisma.vehicle.findMany();
+  // The two reads are independent — run them concurrently.
+  const [existing, vehicles] = await Promise.all([
+    prisma.settings.findFirst(),
+    prisma.vehicle.findMany(),
+  ]);
+  const settings = existing ?? (await prisma.settings.create({ data: {} }));
   return Response.json({ settings, vehicles });
 }
 
