@@ -64,6 +64,15 @@ const navItems = [
 export default function NavRail() {
   const pathname = usePathname();
 
+  // The login screen has no session yet — don't show the app navigation there.
+  if (pathname === "/login") return null;
+
+  async function handleLogout() {
+    await fetch("/api/auth/logout", { method: "POST" }).catch(() => {});
+    // Full reload so the proxy sees the cleared cookie and routes to /login.
+    window.location.assign("/login");
+  }
+
   return (
     <nav className="md-nav-rail">
       {navItems.map((item) => {
@@ -83,6 +92,21 @@ export default function NavRail() {
           </Link>
         );
       })}
+      <button
+        type="button"
+        onClick={handleLogout}
+        className="md-nav-item"
+        aria-label="Log out"
+      >
+        <span>
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4" />
+            <path d="M16 17l5-5-5-5" />
+            <path d="M21 12H9" />
+          </svg>
+        </span>
+        <span>Log out</span>
+      </button>
     </nav>
   );
 }
