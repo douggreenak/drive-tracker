@@ -1,10 +1,18 @@
 "use client";
 
 import { Suspense, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
+
+// Only allow same-site, absolute-path redirects. Rejects protocol-relative
+// (`//evil.com`) and backslash (`/\evil.com`) URLs that browsers treat as
+// off-site, preventing an open-redirect via a crafted `?next=` link.
+function safeNext(next: string | null): string {
+  if (!next || !next.startsWith("/")) return "/";
+  if (next.startsWith("//") || next.startsWith("/\\")) return "/";
+  return next;
+}
 
 function LoginForm() {
-  const router = useRouter();
   const searchParams = useSearchParams();
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
@@ -25,9 +33,8 @@ function LoginForm() {
         setPassword("");
         return;
       }
-      const next = searchParams.get("next");
       // Full reload so the proxy re-reads the new cookie for the destination.
-      window.location.assign(next && next.startsWith("/") ? next : "/");
+      window.location.assign(safeNext(searchParams.get("next")));
     } catch {
       setError("Something went wrong. Try again.");
     } finally {

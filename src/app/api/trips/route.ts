@@ -88,8 +88,17 @@ export async function DELETE(request: NextRequest) {
 
 export async function PATCH(request: NextRequest) {
   const body = await request.json();
-  const { id, ...data } = body;
-  if (data.date) data.date = new Date(data.date);
+  const { id } = body;
+  if (!id) return Response.json({ error: "Missing id" }, { status: 400 });
+
+  // Only allow a known set of editable fields — never spread arbitrary client
+  // JSON into the update, which would let any column be overwritten.
+  const data: Record<string, unknown> = {};
+  if ("isFavorite" in body) data.isFavorite = body.isFavorite === true || body.isFavorite === "true";
+  if ("category" in body) data.category = body.category;
+  if ("notes" in body) data.notes = body.notes;
+  if ("date" in body) data.date = new Date(body.date);
+
   const trip = await prisma.trip.update({ where: { id }, data });
   return Response.json(trip);
 }

@@ -16,16 +16,13 @@ function signingSecret(): string {
   return process.env.AUTH_SECRET || process.env.SITE_PASSWORD || "";
 }
 
-// Constant-time string comparison that doesn't leak length-mismatch early.
+// Constant-time string comparison. Both sides are hashed to a fixed 32-byte
+// digest first, so neither the length nor the contents of the secret leak
+// through comparison timing.
 function safeEqual(a: string, b: string): boolean {
-  const ab = Buffer.from(a);
-  const bb = Buffer.from(b);
-  if (ab.length !== bb.length) {
-    // Still run a comparison to keep timing roughly constant, then fail.
-    crypto.timingSafeEqual(ab, ab);
-    return false;
-  }
-  return crypto.timingSafeEqual(ab, bb);
+  const ha = crypto.createHash("sha256").update(a).digest();
+  const hb = crypto.createHash("sha256").update(b).digest();
+  return crypto.timingSafeEqual(ha, hb);
 }
 
 function sign(payload: string): string {
