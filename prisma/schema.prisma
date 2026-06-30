@@ -41,6 +41,7 @@ model GasEntry {
   fuelType       FuelType @default(REGULAR)
   stationName    String?
   odometer       Float?
+  vehicleName    String?
   tripId         String?
   trip           Trip?    @relation(fields: [tripId], references: [id])
   createdAt      DateTime @default(now())

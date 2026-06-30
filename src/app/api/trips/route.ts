@@ -82,7 +82,13 @@ export async function POST(request: NextRequest) {
 
 export async function DELETE(request: NextRequest) {
   const { id } = await request.json();
-  await prisma.trip.delete({ where: { id } });
+  // Remove the trip and everything tied to it. Gas entries reference the trip, so they must go
+  // first (the FK has no cascade) — do both in one transaction so a trip is never left with
+  // orphaned fuel rows.
+  await prisma.$transaction([
+    prisma.gasEntry.deleteMany({ where: { tripId: id } }),
+    prisma.trip.delete({ where: { id } }),
+  ]);
   return Response.json({ success: true });
 }
 

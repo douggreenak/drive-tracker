@@ -46,6 +46,7 @@ export async function POST(request: NextRequest) {
       fuelType: body.fuelType || "REGULAR",
       stationName: body.stationName || null,
       odometer: body.odometer || null,
+      vehicleName: body.vehicleName || null,
       tripId: body.tripId || null,
     },
   });
