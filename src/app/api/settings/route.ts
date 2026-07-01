@@ -25,7 +25,16 @@ export async function PUT(request: NextRequest) {
       },
     });
   } else {
-    settings = await prisma.settings.create({ data: body });
+    // Allow-list the editable fields (matching the update branch) so a client can't seed the
+    // singleton settings row with a chosen primary key or arbitrary columns via mass-assignment.
+    settings = await prisma.settings.create({
+      data: {
+        monthlyBudget: body.monthlyBudget ?? undefined,
+        distanceUnit: body.distanceUnit ?? undefined,
+        currency: body.currency ?? undefined,
+        theme: body.theme ?? undefined,
+      },
+    });
   }
   return Response.json(settings);
 }

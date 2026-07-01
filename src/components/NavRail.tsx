@@ -27,6 +27,26 @@ const navItems = [
     ),
   },
   {
+    href: "/schedule",
+    label: "Schedule",
+    icon: (
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+        <rect x="3" y="4" width="18" height="18" rx="2" />
+        <path d="M16 2v4M8 2v4M3 10h18" />
+      </svg>
+    ),
+  },
+  {
+    href: "/insights",
+    label: "Insights",
+    icon: (
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M3 3v18h18" />
+        <path d="M7 15l4-4 3 3 5-6" />
+      </svg>
+    ),
+  },
+  {
     href: "/gas",
     label: "Gas",
     icon: (

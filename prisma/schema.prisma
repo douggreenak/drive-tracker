@@ -22,6 +22,8 @@ model Trip {
   routeEncoded  String?
   category      TripCategory @default(OTHER)
   isFavorite    Boolean      @default(false)
+  // Who covers this drive's fuel — the app's core "who pays for gas" concept, mirrored from iOS.
+  paidBy        PaidBy       @default(SELF)
   createdAt     DateTime     @default(now())
   updatedAt     DateTime     @updatedAt
   gasEntries    GasEntry[]
@@ -29,6 +31,7 @@ model Trip {
   @@index([date])
   @@index([category])
   @@index([isFavorite])
+  @@index([paidBy])
 }
 
 model GasEntry {
@@ -71,6 +74,38 @@ model Settings {
   theme         String @default("system")
 }
 
+// Mirror of the iOS ScheduledDrive (the phone is the source of truth; this is a best-effort copy
+// so the web dashboard can show and manage the schedule).
+model ScheduledDrive {
+  id                  String       @id @default(cuid())
+  title               String
+  startAddress        String
+  endAddress          String
+  startLat            Float
+  startLng            Float
+  endLat              Float
+  endLng              Float
+  departure           DateTime
+  estimatedTravelTime Int
+  scheduledArrival    DateTime
+  repeatRule          RepeatRule   @default(NONE)
+  category            TripCategory @default(COMMUTE)
+  paidBy              PaidBy       @default(SELF)
+  vehicleName         String?
+  notes               String?
+  isEnabled           Boolean      @default(true)
+  isCanceled          Boolean      @default(false)
+  lastStartedAt       DateTime?
+  lastCompletedAt     DateTime?
+  // Occurrences the user deleted "just this once", as epoch seconds.
+  skippedOccurrences  Float[]
+  createdAt           DateTime     @default(now())
+  updatedAt           DateTime     @updatedAt
+
+  @@index([departure])
+  @@index([isCanceled])
+}
+
 enum PaidBy {
   SELF
   PARENTS
@@ -91,4 +126,11 @@ enum FuelType {
   MIDGRADE
   PREMIUM
   DIESEL
+}
+
+enum RepeatRule {
+  NONE
+  DAILY
+  WEEKDAYS
+  WEEKLY
 }

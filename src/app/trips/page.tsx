@@ -171,7 +171,7 @@ export default function TripsPage() {
               style={{ animationDelay: `${i * 40}ms` }}
             >
               <div className="flex items-start justify-between gap-3">
-                <div className="flex-1 min-w-0">
+                <Link href={`/trips/${trip.id}`} className="flex-1 min-w-0 block hover:opacity-80 transition-opacity">
                   <div className="flex items-center gap-2 mb-1.5 flex-wrap">
                     <span
                       className="md-badge"
@@ -199,7 +199,7 @@ export default function TripsPage() {
                       {trip.notes}
                     </p>
                   )}
-                </div>
+                </Link>
                 <div className="flex items-center gap-1 shrink-0">
                   <button
                     onClick={() => toggleFavorite(trip.id, trip.isFavorite)}

@@ -11,9 +11,12 @@ export const SESSION_COOKIE = "dt_session";
 export const SESSION_MAX_AGE = 60 * 60 * 24 * 30; // 30 days, in seconds
 
 function signingSecret(): string {
-  // Prefer a dedicated secret; fall back to the password so a missing AUTH_SECRET
-  // still produces signed (not forgeable) cookies in simple setups.
-  return process.env.AUTH_SECRET || process.env.SITE_PASSWORD || "";
+  // A dedicated AUTH_SECRET is required and we intentionally do NOT fall back to SITE_PASSWORD:
+  // signing session cookies with the login password would let anyone who guesses or derives the
+  // password forge valid sessions offline (and forged cookies would survive a password change).
+  // If AUTH_SECRET is unset, signing/verification fail closed (nobody is authenticated) instead of
+  // degrading to a weaker, guessable key.
+  return process.env.AUTH_SECRET || "";
 }
 
 // Constant-time string comparison. Both sides are hashed to a fixed 32-byte
