@@ -53,6 +53,7 @@ export async function GET(request: NextRequest) {
       category: true,
       isFavorite: true,
       paidBy: true,
+      stops: true,
       gasEntries: { select: { totalCost: true, paidBy: true } },
     },
   });
@@ -77,6 +78,7 @@ export async function POST(request: NextRequest) {
       category: body.category || "OTHER",
       isFavorite: body.isFavorite || false,
       paidBy: body.paidBy === "PARENTS" ? "PARENTS" : "SELF",
+      stops: Array.isArray(body.stops) ? body.stops : undefined,
     },
   });
   return Response.json(trip, { status: 201 });
@@ -107,6 +109,7 @@ export async function PATCH(request: NextRequest) {
   if ("notes" in body) data.notes = body.notes;
   if ("date" in body) data.date = new Date(body.date);
   if ("paidBy" in body) data.paidBy = body.paidBy === "PARENTS" ? "PARENTS" : "SELF";
+  if ("stops" in body && Array.isArray(body.stops)) data.stops = body.stops;
 
   const trip = await prisma.trip.update({ where: { id }, data });
   return Response.json(trip);

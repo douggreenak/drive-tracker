@@ -21,6 +21,7 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
       category: true,
       isFavorite: true,
       paidBy: true,
+      stops: true,
       routeEncoded: true,
       gasEntries: {
         select: { id: true, date: true, gallons: true, pricePerGallon: true, totalCost: true, paidBy: true, fuelType: true, stationName: true },

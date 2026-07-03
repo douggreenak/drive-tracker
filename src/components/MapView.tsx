@@ -26,8 +26,36 @@ interface MapViewProps {
     endLng: number;
     startAddress: string;
     endAddress: string;
+    /// Google-style encoded polyline (precision 5) of the actual recorded route, if available.
+    routeEncoded?: string | null;
+    /// Intermediate stops to mark along the route.
+    stops?: Array<{ address?: string; lat: number; lng: number }> | null;
   }>;
   interactive?: boolean;
+}
+
+/// Decode a Google-style encoded polyline (precision 5) into [lat, lng] pairs.
+function decodePolyline(encoded: string): [number, number][] {
+  const points: [number, number][] = [];
+  let index = 0, lat = 0, lng = 0;
+  while (index < encoded.length) {
+    let result = 0, shift = 0, b: number;
+    do {
+      b = encoded.charCodeAt(index++) - 63;
+      result |= (b & 0x1f) << shift;
+      shift += 5;
+    } while (b >= 0x20);
+    lat += result & 1 ? ~(result >> 1) : result >> 1;
+    result = 0; shift = 0;
+    do {
+      b = encoded.charCodeAt(index++) - 63;
+      result |= (b & 0x1f) << shift;
+      shift += 5;
+    } while (b >= 0x20);
+    lng += result & 1 ? ~(result >> 1) : result >> 1;
+    points.push([lat / 1e5, lng / 1e5]);
+  }
+  return points;
 }
 
 export default function MapView({
@@ -75,17 +103,34 @@ export default function MapView({
           .addTo(map)
           .bindPopup(`<b>End:</b> ${route.endAddress}`);
 
-        L.polyline(
-          [
-            [route.startLat, route.startLng],
-            [route.endLat, route.endLng],
-          ],
-          {
-            color: "var(--md-primary, #1a6b52)",
-            weight: 3,
-            opacity: 0.7,
-          }
-        ).addTo(map);
+        // Numbered pins for any intermediate stops.
+        (route.stops ?? []).forEach((stop, i) => {
+          const stopIcon = L.divIcon({
+            className: "custom-marker",
+            html: `<div style="width:18px;height:18px;border-radius:50%;background:#e8a33d;border:2px solid white;color:white;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 4px rgba(0,0,0,0.3)">${i + 1}</div>`,
+            iconSize: [18, 18],
+            iconAnchor: [9, 9],
+          });
+          L.marker([stop.lat, stop.lng], { icon: stopIcon })
+            .addTo(map)
+            .bindPopup(`<b>Stop ${i + 1}:</b> ${stop.address ?? ""}`);
+          bounds.extend([stop.lat, stop.lng]);
+        });
+
+        // Draw the actual recorded route when we have it; otherwise fall back to a straight line.
+        const decoded = route.routeEncoded ? decodePolyline(route.routeEncoded) : null;
+        if (decoded && decoded.length >= 2) {
+          L.polyline(decoded, { color: "var(--md-primary, #1a6b52)", weight: 4, opacity: 0.85 }).addTo(map);
+          decoded.forEach((p) => bounds.extend(p));
+        } else {
+          L.polyline(
+            [
+              [route.startLat, route.startLng],
+              [route.endLat, route.endLng],
+            ],
+            { color: "var(--md-primary, #1a6b52)", weight: 3, opacity: 0.7, dashArray: "6 8" }
+          ).addTo(map);
+        }
 
         bounds.extend([route.startLat, route.startLng]);
         bounds.extend([route.endLat, route.endLng]);

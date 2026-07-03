@@ -24,6 +24,8 @@ model Trip {
   isFavorite    Boolean      @default(false)
   // Who covers this drive's fuel — the app's core "who pays for gas" concept, mirrored from iOS.
   paidBy        PaidBy       @default(SELF)
+  // Multi-stop waypoints (JSON array of {address,lat,lng}), start → stops → end.
+  stops         Json?
   createdAt     DateTime     @default(now())
   updatedAt     DateTime     @updatedAt
   gasEntries    GasEntry[]
@@ -93,6 +95,8 @@ model ScheduledDrive {
   paidBy              PaidBy       @default(SELF)
   vehicleName         String?
   notes               String?
+  // Multi-stop waypoints (JSON array of {address,lat,lng}), start → stops → end.
+  stops               Json?
   isEnabled           Boolean      @default(true)
   isCanceled          Boolean      @default(false)
   lastStartedAt       DateTime?

@@ -10,12 +10,22 @@ interface ScheduledDrive {
   endAddress: string;
   departure: string;
   scheduledArrival: string;
+  estimatedTravelTime: number;
   repeatRule: string;
   category: string;
   paidBy: string;
   vehicleName: string | null;
+  notes: string | null;
+  isEnabled: boolean;
   isCanceled: boolean;
   lastStartedAt: string | null;
+  lastCompletedAt: string | null;
+  skippedOccurrences: number[] | null;
+  stops: Array<{ address?: string; lat: number; lng: number }> | null;
+}
+
+function isSkipped(drive: ScheduledDrive, date: Date): boolean {
+  return (drive.skippedOccurrences ?? []).some((s) => Math.abs(s * 1000 - date.getTime()) < 60000);
 }
 
 const CATEGORY_LABELS: Record<string, string> = {
@@ -40,7 +50,8 @@ function nextDeparture(drive: ScheduledDrive): Date {
       drive.repeatRule === "DAILY" ||
       (drive.repeatRule === "WEEKDAYS" && wd >= 1 && wd <= 5) ||
       (drive.repeatRule === "WEEKLY" && wd === base.getDay());
-    if (candidate >= now && matches) return new Date(candidate);
+    // Skip occurrences the user deleted "just this once".
+    if (candidate >= now && matches && !isSkipped(drive, candidate)) return new Date(candidate);
     candidate.setDate(candidate.getDate() + 1);
   }
   return base;
@@ -48,8 +59,16 @@ function nextDeparture(drive: ScheduledDrive): Date {
 
 function statusFor(drive: ScheduledDrive, dep: Date): { label: string; color: string } {
   if (drive.isCanceled) return { label: "CANCELED", color: "var(--md-error)" };
-  const now = new Date();
-  if (now < dep) return { label: "ON TIME", color: "var(--md-success)" };
+  const now = Date.now();
+  const budgetMs = new Date(drive.scheduledArrival).getTime() - new Date(drive.departure).getTime();
+  const lo = dep.getTime() - 30 * 60000;
+  const hi = dep.getTime() + budgetMs + 6 * 3600 * 1000;
+  const started = drive.lastStartedAt ? new Date(drive.lastStartedAt).getTime() : null;
+  const completed = drive.lastCompletedAt ? new Date(drive.lastCompletedAt).getTime() : null;
+  const inWindow = (t: number | null) => t !== null && t >= lo && t <= hi;
+  // This occurrence was actually driven → mark it departed instead of perpetually "LATE".
+  if (inWindow(completed) || inWindow(started)) return { label: "DEPARTED", color: "var(--md-on-surface-variant)" };
+  if (now < dep.getTime()) return { label: "ON TIME", color: "var(--md-success)" };
   return { label: "LATE", color: "var(--md-warning)" };
 }
 
@@ -70,6 +89,7 @@ export default function SchedulePage() {
   }
 
   const rows = drives
+    .filter((d) => d.isEnabled !== false)
     .map((d) => ({ drive: d, dep: nextDeparture(d) }))
     .sort((a, b) => a.dep.getTime() - b.dep.getTime());
 
@@ -113,11 +133,25 @@ export default function SchedulePage() {
                       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
                       {drive.endAddress}
                     </p>
+                    {drive.stops && drive.stops.length > 0 && (
+                      <p className="text-xs mt-1 flex items-center gap-1 flex-wrap" style={{ color: "var(--md-on-surface-variant)" }}>
+                        {drive.stops.map((s, i) => (
+                          <span key={i} className="inline-flex items-center gap-1">
+                            <span className="inline-flex items-center justify-center rounded-full text-white text-[9px] font-bold" style={{ width: 14, height: 14, background: "#e8a33d" }}>{i + 1}</span>
+                            {s.address?.split(",")[0] || "stop"}
+                          </span>
+                        ))}
+                      </p>
+                    )}
                     <p className="text-xs mt-1" style={{ color: "var(--md-on-surface-variant)" }}>
                       {CATEGORY_LABELS[drive.category] || drive.category}
                       {drive.vehicleName ? ` · ${drive.vehicleName}` : ""}
+                      {drive.estimatedTravelTime ? ` · ${Math.round(drive.estimatedTravelTime / 60)} min drive` : ""}
                       {` · arrives ${format(new Date(drive.scheduledArrival), "h:mm a")}`}
                     </p>
+                    {drive.notes && (
+                      <p className="text-xs mt-1 italic" style={{ color: "var(--md-on-surface-variant)" }}>{drive.notes}</p>
+                    )}
                   </div>
                   <span className="md-badge shrink-0" style={{ background: status.color, color: "#fff", fontWeight: 700 }}>
                     {status.label}

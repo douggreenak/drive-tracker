@@ -37,6 +37,7 @@ export default function NewTripPage() {
   const [date, setDate] = useState(new Date().toISOString().split("T")[0]);
   const [notes, setNotes] = useState("");
   const [category, setCategory] = useState("OTHER");
+  const [paidBy, setPaidBy] = useState("SELF");
   const [saving, setSaving] = useState(false);
 
   function handleRouteSelect(data: RouteData) {
@@ -62,6 +63,7 @@ export default function NewTripPage() {
           endLat: route.endLat, endLng: route.endLng,
           distance: route.distance, duration: route.duration,
           notes: notes || null,
+          paidBy,
         }),
       });
       if (res.ok) {
@@ -125,6 +127,25 @@ export default function NewTripPage() {
                   className={`md-chip ${category === cat.value ? "active" : ""}`}
                 >
                   <span>{cat.icon}</span> {cat.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Who pays for gas — the core concept */}
+          <div>
+            <label className="block text-sm font-medium mb-2" style={{ color: "var(--md-on-surface-variant)" }}>
+              Who pays for gas
+            </label>
+            <div className="flex gap-2">
+              {[{ v: "SELF", l: "I pay" }, { v: "PARENTS", l: "Parents pay" }].map((opt) => (
+                <button
+                  key={opt.v}
+                  type="button"
+                  onClick={() => setPaidBy(opt.v)}
+                  className={`md-chip ${paidBy === opt.v ? "active" : ""}`}
+                >
+                  {opt.l}
                 </button>
               ))}
             </div>

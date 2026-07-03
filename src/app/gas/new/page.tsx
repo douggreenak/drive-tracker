@@ -31,12 +31,18 @@ export default function NewGasEntryPage() {
   const [odometer, setOdometer] = useState("");
   const [tripId, setTripId] = useState("");
   const [trips, setTrips] = useState<Trip[]>([]);
+  const [vehicleName, setVehicleName] = useState("");
+  const [vehicles, setVehicles] = useState<{ name: string }[]>([]);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     fetch("/api/trips")
       .then((r) => r.json())
       .then(setTrips)
+      .catch(() => {});
+    fetch("/api/settings")
+      .then((r) => r.json())
+      .then((d) => setVehicles(d.vehicles ?? []))
       .catch(() => {});
   }, []);
 
@@ -59,6 +65,7 @@ export default function NewGasEntryPage() {
           paidBy, fuelType,
           stationName: stationName || null,
           odometer: odometer ? parseFloat(odometer) : null,
+          vehicleName: vehicleName || null,
           tripId: tripId || null,
         }),
       });
@@ -164,6 +171,18 @@ export default function NewGasEntryPage() {
           <label className="block text-sm font-medium mb-1.5" style={{ color: "var(--md-on-surface-variant)" }}>Odometer (optional)</label>
           <input type="number" value={odometer} onChange={(e) => setOdometer(e.target.value)} placeholder="Current mileage" className="md-text-field" />
         </div>
+
+        {vehicles.length > 0 && (
+          <div className="animate-fade-in-up stagger-7">
+            <label className="block text-sm font-medium mb-1.5" style={{ color: "var(--md-on-surface-variant)" }}>Vehicle (optional)</label>
+            <select value={vehicleName} onChange={(e) => setVehicleName(e.target.value)} className="md-text-field">
+              <option value="">None</option>
+              {vehicles.map((v) => (
+                <option key={v.name} value={v.name}>{v.name}</option>
+              ))}
+            </select>
+          </div>
+        )}
 
         {trips.length > 0 && (
           <div className="animate-fade-in-up stagger-8">

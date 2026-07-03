@@ -32,6 +32,7 @@ function sanitize(body: Record<string, unknown>) {
     lastStartedAt: body.lastStartedAt ? new Date(String(body.lastStartedAt)) : null,
     lastCompletedAt: body.lastCompletedAt ? new Date(String(body.lastCompletedAt)) : null,
     skippedOccurrences: skipped,
+    stops: Array.isArray(body.stops) ? body.stops : undefined,
   };
 }
 

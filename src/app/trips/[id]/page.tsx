@@ -34,6 +34,8 @@ interface Trip {
   category: string;
   isFavorite: boolean;
   paidBy: string;
+  routeEncoded: string | null;
+  stops: Array<{ address?: string; lat: number; lng: number }> | null;
   gasEntries: GasEntry[];
 }
 
@@ -66,6 +68,29 @@ export default function TripDetailPage({ params }: { params: Promise<{ id: strin
       body: JSON.stringify({ id: trip.id, isFavorite: next }),
     });
     toast(next ? "Added to favorites" : "Removed from favorites");
+  }
+
+  async function togglePaidBy() {
+    if (!trip) return;
+    const next = trip.paidBy === "PARENTS" ? "SELF" : "PARENTS";
+    setTrip({ ...trip, paidBy: next });
+    await fetch("/api/trips", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: trip.id, paidBy: next }),
+    });
+    toast(next === "PARENTS" ? "Parents pay for this drive" : "You pay for this drive");
+  }
+
+  async function updateField(patch: Record<string, unknown>) {
+    if (!trip) return;
+    setTrip({ ...trip, ...patch } as Trip);
+    await fetch("/api/trips", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: trip.id, ...patch }),
+    });
+    toast("Saved");
   }
 
   async function deleteTrip() {
@@ -128,12 +153,23 @@ export default function TripDetailPage({ params }: { params: Promise<{ id: strin
         <span className="md-badge" style={{ background: "var(--md-primary-container)", color: "var(--md-on-primary-container)" }}>
           {format(new Date(trip.date), "EEEE, MMM d, yyyy · h:mm a")}
         </span>
-        <span className="md-badge" style={{ background: "var(--md-tertiary-container)", color: "var(--md-on-surface)" }}>
-          {CATEGORY_LABELS[trip.category] || trip.category}
-        </span>
-        <span className="md-badge" style={{ background: trip.paidBy === "PARENTS" ? "var(--md-tertiary-container)" : "var(--md-primary-container)", color: "var(--md-on-surface)" }}>
-          {trip.paidBy === "PARENTS" ? "Parents pay" : "I pay"}
-        </span>
+        <select
+          value={trip.category}
+          onChange={(e) => updateField({ category: e.target.value })}
+          className="md-badge !border !cursor-pointer"
+          style={{ background: "var(--md-tertiary-container)", color: "var(--md-on-surface)" }}
+          title="Change category"
+        >
+          {Object.entries(CATEGORY_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+        </select>
+        <button
+          onClick={togglePaidBy}
+          className="md-badge !cursor-pointer"
+          style={{ background: trip.paidBy === "PARENTS" ? "var(--md-tertiary-container)" : "var(--md-primary-container)", color: "var(--md-on-surface)" }}
+          title="Tap to change who pays"
+        >
+          {trip.paidBy === "PARENTS" ? "Parents pay" : "I pay"} ⇄
+        </button>
       </div>
 
       {/* Map */}
@@ -142,17 +178,30 @@ export default function TripDetailPage({ params }: { params: Promise<{ id: strin
           id: trip.id, startLat: trip.startLat, startLng: trip.startLng,
           endLat: trip.endLat, endLng: trip.endLng,
           startAddress: trip.startAddress, endAddress: trip.endAddress,
+          routeEncoded: trip.routeEncoded, stops: trip.stops,
         }]} />
       </div>
 
       {/* Route */}
       <div className="md-card mb-4 animate-fade-in-up">
         <p className="font-medium">{trip.startAddress}</p>
+        {(trip.stops ?? []).map((stop, i) => (
+          <p key={i} className="text-sm flex items-center gap-1.5 mt-1" style={{ color: "var(--md-on-surface-variant)" }}>
+            <span className="inline-flex items-center justify-center rounded-full text-white text-[10px] font-bold" style={{ width: 16, height: 16, background: "#e8a33d" }}>{i + 1}</span>
+            {stop.address || `${stop.lat.toFixed(4)}, ${stop.lng.toFixed(4)}`}
+          </p>
+        ))}
         <p className="text-sm flex items-center gap-1.5 mt-1" style={{ color: "var(--md-on-surface-variant)" }}>
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
           {trip.endAddress}
         </p>
-        {trip.notes && <p className="text-sm mt-3 italic" style={{ color: "var(--md-on-surface-variant)" }}>{trip.notes}</p>}
+        <textarea
+          defaultValue={trip.notes ?? ""}
+          placeholder="Add notes…"
+          onBlur={(e) => { if (e.target.value !== (trip.notes ?? "")) updateField({ notes: e.target.value || null }); }}
+          className="md-text-field mt-3 w-full text-sm"
+          rows={2}
+        />
       </div>
 
       {/* Stats */}
