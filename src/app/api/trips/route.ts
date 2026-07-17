@@ -110,6 +110,16 @@ export async function PATCH(request: NextRequest) {
   if ("date" in body) data.date = new Date(body.date);
   if ("paidBy" in body) data.paidBy = body.paidBy === "PARENTS" ? "PARENTS" : "SELF";
   if ("stops" in body && Array.isArray(body.stops)) data.stops = body.stops;
+  // Trimming a trip (cutting off a forgotten tail/start) rewrites the geometry + stats + endpoints.
+  if ("distance" in body) data.distance = Number(body.distance) || 0;
+  if ("duration" in body) data.duration = Math.trunc(Number(body.duration) || 0);
+  if ("routeEncoded" in body) data.routeEncoded = body.routeEncoded == null ? null : String(body.routeEncoded);
+  if ("startAddress" in body) data.startAddress = String(body.startAddress);
+  if ("endAddress" in body) data.endAddress = String(body.endAddress);
+  if ("startLat" in body) data.startLat = Number(body.startLat);
+  if ("startLng" in body) data.startLng = Number(body.startLng);
+  if ("endLat" in body) data.endLat = Number(body.endLat);
+  if ("endLng" in body) data.endLng = Number(body.endLng);
 
   const trip = await prisma.trip.update({ where: { id }, data });
   return Response.json(trip);

@@ -19,6 +19,51 @@ interface Analytics {
   byFuel: { type: string; spent: number; gallons: number }[];
   byCategory: { category: string; trips: number; miles: number }[];
 }
+interface ScheduledLite {
+  id: string;
+  scheduledArrival: string;
+  lastCompletedAt: string | null;
+}
+
+// Signed delay (seconds) of an actual completion vs its scheduled arrival. The scheduled arrival's
+// time-of-day is projected onto the completion's day so repeating drives aren't judged against the
+// template's original date; the ±12h wrap keeps a just-past-midnight completion sensible.
+function onTimeDelaySeconds(scheduledArrival: string, completed: string): number {
+  const s = new Date(scheduledArrival);
+  const c = new Date(completed);
+  const target = new Date(c);
+  target.setHours(s.getHours(), s.getMinutes(), s.getSeconds(), 0);
+  const day = 86_400_000;
+  let diff = c.getTime() - target.getTime();
+  if (diff > day / 2) diff -= day;
+  else if (diff < -day / 2) diff += day;
+  return Math.round(diff / 1000);
+}
+
+// On-time stats over scheduled drives that have a recorded completion. On time = within ±90s,
+// mirroring the iOS `DrivingStats` threshold. Returns null when there's nothing to score.
+function computeOnTime(drives: ScheduledLite[] | null) {
+  const done = (drives ?? []).filter((d) => d.lastCompletedAt);
+  if (done.length === 0) return null;
+  let onTimeCount = 0;
+  let totalDelay = 0;
+  for (const d of done) {
+    const delay = onTimeDelaySeconds(d.scheduledArrival, d.lastCompletedAt!);
+    totalDelay += delay;
+    if (Math.abs(delay) <= 90) onTimeCount += 1;
+  }
+  return {
+    count: done.length,
+    onTimeCount,
+    onTimePercent: (onTimeCount / done.length) * 100,
+    avgDelaySeconds: Math.round(totalDelay / done.length),
+  };
+}
+
+function formatDelayMagnitude(seconds: number): string {
+  const m = Math.round(Math.abs(seconds) / 60);
+  return m < 1 ? "On time" : `${m}m`;
+}
 
 const CATEGORY_LABELS: Record<string, string> = {
   COMMUTE: "Commute", ERRAND: "Errand", ROAD_TRIP: "Road Trip",
@@ -38,10 +83,12 @@ const METRICS: { key: Metric; label: string; prefix?: string; suffix?: string }[
 
 export default function InsightsPage() {
   const [data, setData] = useState<Analytics | null>(null);
+  const [scheduled, setScheduled] = useState<ScheduledLite[] | null>(null);
   const [metric, setMetric] = useState<Metric>("spent");
 
   useEffect(() => {
     fetch("/api/analytics").then((r) => r.json()).then(setData).catch(() => setData(null));
+    fetch("/api/scheduled").then((r) => r.json()).then(setScheduled).catch(() => setScheduled([]));
   }, []);
 
   if (!data) {
@@ -60,6 +107,7 @@ export default function InsightsPage() {
   const active = METRICS.find((m) => m.key === metric)!;
   const fmt = (n: number) => `${active.prefix ?? ""}${metric === "spent" ? n.toFixed(2) : n}${active.suffix ?? ""}`;
   const totalSpent = data.byVehicle.reduce((s, v) => s + v.spent, 0);
+  const onTime = computeOnTime(scheduled);
 
   return (
     <div className="p-6 max-w-5xl mx-auto page-enter">
@@ -101,6 +149,40 @@ export default function InsightsPage() {
           <Legend color="var(--md-primary)" label="Me" />
           <Legend color="var(--md-tertiary)" label="Parents" />
         </div>
+      </div>
+
+      {/* On-time performance (scheduled + completed drives) */}
+      <div className="md-card mb-6 animate-fade-in-up" style={{ animationDelay: "100ms" }}>
+        <h3 className="text-sm font-medium mb-4" style={{ color: "var(--md-on-surface-variant)" }}>
+          On-time performance
+        </h3>
+        {!onTime ? (
+          <p className="text-sm" style={{ color: "var(--md-on-surface-variant)" }}>
+            No completed scheduled drives yet.
+          </p>
+        ) : (
+          <div className="flex flex-wrap items-end gap-8">
+            <div>
+              <p
+                className="text-3xl font-bold tracking-tight"
+                style={{ color: onTime.onTimePercent >= 80 ? "var(--md-success)" : onTime.onTimePercent >= 50 ? "var(--md-warning)" : "var(--md-error)" }}
+              >
+                {onTime.onTimePercent.toFixed(0)}%
+              </p>
+              <p className="text-xs mt-0.5" style={{ color: "var(--md-on-surface-variant)" }}>on time</p>
+            </div>
+            <div>
+              <p className="text-3xl font-bold tracking-tight">{formatDelayMagnitude(onTime.avgDelaySeconds)}</p>
+              <p className="text-xs mt-0.5" style={{ color: "var(--md-on-surface-variant)" }}>
+                avg {onTime.avgDelaySeconds > 45 ? "late" : onTime.avgDelaySeconds < -45 ? "early" : "delay"}
+              </p>
+            </div>
+            <div>
+              <p className="text-3xl font-bold tracking-tight">{onTime.onTimeCount}/{onTime.count}</p>
+              <p className="text-xs mt-0.5" style={{ color: "var(--md-on-surface-variant)" }}>completed drives</p>
+            </div>
+          </div>
+        )}
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

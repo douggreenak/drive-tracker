@@ -17,6 +17,7 @@ interface GasEntry {
   fuelType: string;
   stationName: string | null;
   odometer: number | null;
+  vehicleName: string | null;
   trip: { startAddress: string; endAddress: string } | null;
 }
 
@@ -143,6 +144,14 @@ export default function GasPage() {
                     >
                       {FUEL_LABELS[entry.fuelType] || entry.fuelType}
                     </span>
+                    {entry.vehicleName && (
+                      <span
+                        className="md-badge"
+                        style={{ background: "var(--md-surface-container-high)", color: "var(--md-on-surface-variant)" }}
+                      >
+                        {entry.vehicleName}
+                      </span>
+                    )}
                     <span className="text-xs" style={{ color: "var(--md-on-surface-variant)" }}>
                       {format(new Date(entry.date), "MMM d, yyyy")}
                     </span>

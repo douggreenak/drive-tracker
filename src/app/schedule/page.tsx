@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { format } from "date-fns";
 
 interface ScheduledDrive {
@@ -36,25 +36,68 @@ const REPEAT_LABELS: Record<string, string> = {
   NONE: "Once", DAILY: "Daily", WEEKDAYS: "Weekdays", WEEKLY: "Weekly",
 };
 
-// Next concrete departure for a (possibly repeating) drive — mirrors the iOS occurrence logic
-// closely enough for a read-only overview.
-function nextDeparture(drive: ScheduledDrive): Date {
+function startOfDay(d: Date): Date {
+  const x = new Date(d);
+  x.setHours(0, 0, 0, 0);
+  return x;
+}
+
+// True if this occurrence matches the drive's repeat rule. 0=Sun..6=Sat.
+function matchesRule(drive: ScheduledDrive, date: Date): boolean {
+  const wd = date.getDay();
+  switch (drive.repeatRule) {
+    case "DAILY": return true;
+    case "WEEKDAYS": return wd >= 1 && wd <= 5;
+    case "WEEKLY": return wd === new Date(drive.departure).getDay();
+    default: return true; // NONE
+  }
+}
+
+// Next concrete departure at or after `reference` for a (possibly repeating) drive — mirrors the
+// iOS `nextDeparture`, including the first-departure guard so a drive whose first departure is still
+// in the future never reports a phantom occurrence today.
+function nextDeparture(drive: ScheduledDrive, reference: Date = new Date()): Date {
   const base = new Date(drive.departure);
   if (drive.repeatRule === "NONE") return base;
-  const now = new Date();
-  const candidate = new Date(now);
+  const firstDay = startOfDay(base);
+  const candidate = new Date(reference);
   candidate.setHours(base.getHours(), base.getMinutes(), 0, 0);
   for (let i = 0; i < 400; i++) {
-    const wd = candidate.getDay(); // 0=Sun..6=Sat
-    const matches =
-      drive.repeatRule === "DAILY" ||
-      (drive.repeatRule === "WEEKDAYS" && wd >= 1 && wd <= 5) ||
-      (drive.repeatRule === "WEEKLY" && wd === base.getDay());
-    // Skip occurrences the user deleted "just this once".
-    if (candidate >= now && matches && !isSkipped(drive, candidate)) return new Date(candidate);
+    // Skip occurrences the user deleted "just this once", and never before the series' own start.
+    if (candidate >= reference && candidate >= firstDay && matchesRule(drive, candidate) && !isSkipped(drive, candidate)) {
+      return new Date(candidate);
+    }
     candidate.setDate(candidate.getDate() + 1);
   }
   return base;
+}
+
+// Most recent occurrence at or before `reference`, or null if the drive's first occurrence is still
+// in the future — mirrors the iOS `previousDeparture`.
+function previousDeparture(drive: ScheduledDrive, reference: Date = new Date()): Date | null {
+  const base = new Date(drive.departure);
+  if (drive.repeatRule === "NONE") return base <= reference ? base : null;
+  const firstDay = startOfDay(base);
+  const candidate = new Date(reference);
+  candidate.setHours(base.getHours(), base.getMinutes(), 0, 0);
+  for (let i = 0; i < 400; i++) {
+    if (candidate < firstDay) return null;
+    if (candidate <= reference && matchesRule(drive, candidate) && !isSkipped(drive, candidate)) {
+      return new Date(candidate);
+    }
+    candidate.setDate(candidate.getDate() - 1);
+  }
+  return null;
+}
+
+// The occurrence the on-time status is judged against: whichever scheduled departure — the most
+// recent past one or the next upcoming one — is nearer to `now`. This way a drive whose scheduled
+// window has already passed (and wasn't started) reads as LATE instead of silently rolling forward.
+function statusReferenceDeparture(drive: ScheduledDrive, now: Date = new Date()): Date {
+  const next = nextDeparture(drive, now);
+  const prev = previousDeparture(drive, now);
+  if (!prev || prev.getTime() === next.getTime()) return next;
+  return Math.abs(now.getTime() - prev.getTime()) <= Math.abs(next.getTime() - now.getTime()) ? prev : next;
 }
 
 function statusFor(drive: ScheduledDrive, dep: Date): { label: string; color: string } {
@@ -75,9 +118,36 @@ function statusFor(drive: ScheduledDrive, dep: Date): { label: string; color: st
 export default function SchedulePage() {
   const [drives, setDrives] = useState<ScheduledDrive[] | null>(null);
 
-  useEffect(() => {
+  const fetchDrives = useCallback(() => {
     fetch("/api/scheduled").then((r) => r.json()).then(setDrives).catch(() => setDrives([]));
   }, []);
+
+  useEffect(() => { fetchDrives(); }, [fetchDrives]);
+
+  // Cancel keeps the drive visible with a CANCELED status; Restore un-cancels it. The scheduled
+  // PATCH route re-validates the whole record, so send back the full drive we already have.
+  async function setCanceled(drive: ScheduledDrive, canceled: boolean) {
+    setDrives((prev) => prev?.map((d) => (d.id === drive.id ? { ...d, isCanceled: canceled } : d)) ?? prev);
+    await fetch("/api/scheduled", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...drive, isCanceled: canceled }),
+    }).catch(() => {});
+    fetchDrives();
+  }
+
+  // Delete removes the template (and therefore every occurrence). The DELETE route reads the id
+  // from the JSON body.
+  async function deleteDrive(drive: ScheduledDrive) {
+    if (!window.confirm(`Delete “${drive.title}”? This removes the drive and all of its occurrences.`)) return;
+    setDrives((prev) => prev?.filter((d) => d.id !== drive.id) ?? prev);
+    await fetch("/api/scheduled", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: drive.id }),
+    }).catch(() => {});
+    fetchDrives();
+  }
 
   if (!drives) {
     return (
@@ -90,7 +160,7 @@ export default function SchedulePage() {
 
   const rows = drives
     .filter((d) => d.isEnabled !== false)
-    .map((d) => ({ drive: d, dep: nextDeparture(d) }))
+    .map((d) => ({ drive: d, dep: statusReferenceDeparture(d) }))
     .sort((a, b) => a.dep.getTime() - b.dep.getTime());
 
   return (
@@ -156,6 +226,22 @@ export default function SchedulePage() {
                   <span className="md-badge shrink-0" style={{ background: status.color, color: "#fff", fontWeight: 700 }}>
                     {status.label}
                   </span>
+                </div>
+                <div className="flex items-center gap-2 mt-3 pt-3" style={{ borderTop: "1px solid var(--md-outline-variant)" }}>
+                  <button
+                    onClick={() => setCanceled(drive, !drive.isCanceled)}
+                    className="md-chip"
+                    style={{ color: drive.isCanceled ? "var(--md-success)" : "var(--md-warning)" }}
+                  >
+                    {drive.isCanceled ? "Restore" : "Cancel"}
+                  </button>
+                  <button
+                    onClick={() => deleteDrive(drive)}
+                    className="md-chip"
+                    style={{ color: "var(--md-error)" }}
+                  >
+                    Delete
+                  </button>
                 </div>
               </div>
             );

@@ -17,6 +17,7 @@ interface Trip {
   notes: string | null;
   category: string;
   isFavorite: boolean;
+  paidBy: string;
   gasEntries: Array<{ totalCost: number; paidBy: string }>;
 }
 
@@ -184,6 +185,16 @@ export default function TripsPage() {
                       style={{ background: "var(--md-tertiary-container)", color: "var(--md-on-surface)" }}
                     >
                       {CATEGORY_LABELS[trip.category] || trip.category}
+                    </span>
+                    <span
+                      className="md-badge"
+                      style={
+                        trip.paidBy === "PARENTS"
+                          ? { background: "var(--md-tertiary-container)", color: "var(--md-on-surface)" }
+                          : { background: "var(--md-primary-container)", color: "var(--md-on-primary-container)" }
+                      }
+                    >
+                      {trip.paidBy === "PARENTS" ? "Parents" : "Me"}
                     </span>
                     <span className="text-xs" style={{ color: "var(--md-on-surface-variant)" }}>
                       {trip.distance} mi · {formatDuration(trip.duration)}
