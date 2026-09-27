@@ -10,6 +10,9 @@ datasource db {
 model Trip {
   id            String       @id @default(cuid())
   date          DateTime     @default(now())
+  // Actual arrival time — mirrors iOS `DriveTrip.endDate`. Optional because trips created before
+  // this column existed (and any lightweight web-created trip) may not have one.
+  endDate       DateTime?
   startAddress  String
   endAddress    String
   startLat      Float
@@ -18,22 +21,69 @@ model Trip {
   endLng        Float
   distance      Float
   duration      Int
+  // Seconds the car was actually moving (excludes stops). Mirrors iOS `movingSeconds`.
+  movingSeconds Int?
+  maxSpeed      Float?
+  avgSpeed      Float?
   notes         String?
+  // Title carried over from the schedule this drive was run from, e.g. "Morning Commute".
+  name          String?
   routeEncoded  String?
+  // Snapped/deviation display polyline, base64 of iOS's `matchedPolyline` (JSON `[[lat,lng],...]`).
+  matchedPolyline   String?
+  matchedFraction   Float?
+  usedRouteMatching Boolean @default(false)
   category      TripCategory @default(OTHER)
   isFavorite    Boolean      @default(false)
   // Who covers this drive's fuel — the app's core "who pays for gas" concept, mirrored from iOS.
-  paidBy        PaidBy       @default(SELF)
+  // A `PayerGroup.key`, not a fixed enum — the iOS app lets the user add payer groups beyond the
+  // built-in "Me"/"Parents", so this must accept any key, not just SELF/PARENTS.
+  paidBy        String       @default("SELF")
+  vehicleName   String?
+  vehicleMpg    Float?
+  estimatedGallons Float?
+  scheduledDeparture DateTime?
+  scheduledArrival   DateTime?
+  // Legs of one multi-stop journey share a journeyId; legIndex/legTotal order them.
+  journeyId     String?
+  legIndex      Int      @default(0)
+  legTotal      Int      @default(1)
+  // True for a drive logged after the fact instead of GPS-tracked live — see iOS `isManualEntry`.
+  isManualEntry Boolean  @default(false)
   // Multi-stop waypoints (JSON array of {address,lat,lng}), start → stops → end.
   stops         Json?
   createdAt     DateTime     @default(now())
   updatedAt     DateTime     @updatedAt
   gasEntries    GasEntry[]
+  trackPoints   TrackPoint[]
 
   @@index([date])
   @@index([category])
   @@index([isFavorite])
   @@index([paidBy])
+}
+
+// Full GPS track for a trip. Mirrored from iOS `TrackPoint` — this is what makes a recorded trip
+// replayable on the web map instead of just a straight line between its endpoints. Uploaded and
+// fetched through `/api/trips/[id]/points` rather than inline on the `Trip` payload: a single trip
+// can carry well over a thousand of these, and the trip list/detail views never need them all at
+// once.
+model TrackPoint {
+  id       String   @id @default(cuid())
+  tripId   String
+  trip     Trip     @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  seq      Int
+  t        DateTime
+  lat      Float
+  lng      Float
+  speed    Float
+  course   Float
+  accuracy Float
+  altitude Float   @default(0)
+  onRoad   Boolean @default(false)
+
+  @@index([tripId])
+  @@index([tripId, seq])
 }
 
 model GasEntry {
@@ -42,7 +92,8 @@ model GasEntry {
   gallons        Float
   pricePerGallon Float
   totalCost      Float
-  paidBy         PaidBy
+  // A `PayerGroup.key` — see `Trip.paidBy`'s comment.
+  paidBy         String
   fuelType       FuelType @default(REGULAR)
   stationName    String?
   odometer       Float?
@@ -58,14 +109,41 @@ model GasEntry {
 }
 
 model Vehicle {
+  id           String    @id @default(cuid())
+  name         String
+  make         String?
+  model        String?
+  year         Int?
+  tankSize     Float?
+  avgMpg       Float?
+  lastFilledUp DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+}
+
+// A payer "group" — who covers a drive or fill-up's gas cost. Mirrors iOS `PayerGroup`: the two
+// built-ins ("Me"/"Parents", keys SELF/PARENTS) plus any the user has added from Settings.
+model PayerGroup {
+  id         String  @id @default(cuid())
+  key        String  @unique
+  name       String
+  icon       String
+  colorName  String
+  sortOrder  Int     @default(0)
+  isBuiltIn  Boolean @default(false)
+  isArchived Boolean @default(false)
+}
+
+// A bookmarked location (Home, Shop, School, …). Mirrors iOS `SavedPlace`.
+model SavedPlace {
   id        String   @id @default(cuid())
-  name      String
-  make      String?
-  model     String?
-  year      Int?
-  tankSize  Float?
+  label     String
+  address   String
+  lat       Float
+  lng       Float
+  icon      String   @default("mappin.circle.fill")
+  sortOrder Int      @default(0)
   createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
 }
 
 model Settings {
@@ -74,6 +152,11 @@ model Settings {
   distanceUnit  String @default("miles")
   currency      String @default("USD")
   theme         String @default("system")
+  // Used to estimate per-drive fuel cost for the paid-by breakdowns. Mirrors iOS
+  // `UserSettings.fuelPricePerGallon`.
+  fuelPricePerGallon Float  @default(3.75)
+  // Default payer for ad-hoc drives — a `PayerGroup.key`. Mirrors iOS `defaultPaidByRaw`.
+  defaultPaidBy      String @default("SELF")
 }
 
 // Mirror of the iOS ScheduledDrive (the phone is the source of truth; this is a best-effort copy
@@ -92,7 +175,8 @@ model ScheduledDrive {
   scheduledArrival    DateTime
   repeatRule          RepeatRule   @default(NONE)
   category            TripCategory @default(COMMUTE)
-  paidBy              PaidBy       @default(SELF)
+  // A `PayerGroup.key` — see `Trip.paidBy`'s comment.
+  paidBy              String       @default("SELF")
   vehicleName         String?
   notes               String?
   // Multi-stop waypoints (JSON array of {address,lat,lng}), start → stops → end.
@@ -103,16 +187,14 @@ model ScheduledDrive {
   lastCompletedAt     DateTime?
   // Occurrences the user deleted "just this once", as epoch seconds.
   skippedOccurrences  Float[]
+  // Occurrences canceled "just this once" (the repeat continues; only that departure is marked
+  // canceled). Mirrors iOS `canceledOccurrences` — previously ignored server-side.
+  canceledOccurrences Float[]
   createdAt           DateTime     @default(now())
-  updatedAt           DateTime     @updatedAt
+  updatedAt            DateTime     @updatedAt
 
   @@index([departure])
   @@index([isCanceled])
-}
-
-enum PaidBy {
-  SELF
-  PARENTS
 }
 
 enum TripCategory {

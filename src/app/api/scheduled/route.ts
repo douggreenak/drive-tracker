@@ -10,6 +10,9 @@ function sanitize(body: Record<string, unknown>) {
   const skipped = Array.isArray(body.skippedOccurrences)
     ? (body.skippedOccurrences as unknown[]).map(Number).filter((n) => Number.isFinite(n))
     : [];
+  const canceled = Array.isArray(body.canceledOccurrences)
+    ? (body.canceledOccurrences as unknown[]).map(Number).filter((n) => Number.isFinite(n))
+    : [];
   return {
     title: String(body.title ?? "Drive"),
     startAddress: String(body.startAddress ?? ""),
@@ -24,7 +27,7 @@ function sanitize(body: Record<string, unknown>) {
     repeatRule: (REPEAT.includes(String(body.repeatRule)) ? body.repeatRule : "NONE") as "NONE" | "DAILY" | "WEEKDAYS" | "WEEKLY",
     category: (CATEGORIES.includes(String(body.category)) ? body.category : "COMMUTE") as
       | "COMMUTE" | "ERRAND" | "SCHOOL" | "WORK" | "ROAD_TRIP" | "LEISURE" | "OTHER",
-    paidBy: (body.paidBy === "PARENTS" ? "PARENTS" : "SELF") as "SELF" | "PARENTS",
+    paidBy: body.paidBy ? String(body.paidBy) : "SELF",
     vehicleName: body.vehicleName ? String(body.vehicleName) : null,
     notes: body.notes ? String(body.notes) : null,
     isEnabled: body.isEnabled !== false,
@@ -32,6 +35,7 @@ function sanitize(body: Record<string, unknown>) {
     lastStartedAt: body.lastStartedAt ? new Date(String(body.lastStartedAt)) : null,
     lastCompletedAt: body.lastCompletedAt ? new Date(String(body.lastCompletedAt)) : null,
     skippedOccurrences: skipped,
+    canceledOccurrences: canceled,
     stops: Array.isArray(body.stops) ? body.stops : undefined,
   };
 }
@@ -66,7 +70,7 @@ function sanitizePartial(body: Record<string, unknown>) {
   if (has("scheduledArrival")) { const d = new Date(String(body.scheduledArrival)); if (!Number.isNaN(d.getTime())) out.scheduledArrival = d; }
   if (has("repeatRule") && REPEAT.includes(String(body.repeatRule))) out.repeatRule = body.repeatRule;
   if (has("category") && CATEGORIES.includes(String(body.category))) out.category = body.category;
-  if (has("paidBy")) out.paidBy = body.paidBy === "PARENTS" ? "PARENTS" : "SELF";
+  if (has("paidBy")) out.paidBy = body.paidBy ? String(body.paidBy) : "SELF";
   if (has("vehicleName")) out.vehicleName = body.vehicleName ? String(body.vehicleName) : null;
   if (has("notes")) out.notes = body.notes ? String(body.notes) : null;
   if (has("isEnabled")) out.isEnabled = body.isEnabled !== false;
@@ -75,6 +79,9 @@ function sanitizePartial(body: Record<string, unknown>) {
   if (has("lastCompletedAt")) out.lastCompletedAt = body.lastCompletedAt ? new Date(String(body.lastCompletedAt)) : null;
   if (has("skippedOccurrences") && Array.isArray(body.skippedOccurrences)) {
     out.skippedOccurrences = (body.skippedOccurrences as unknown[]).map(Number).filter((n) => Number.isFinite(n));
+  }
+  if (has("canceledOccurrences") && Array.isArray(body.canceledOccurrences)) {
+    out.canceledOccurrences = (body.canceledOccurrences as unknown[]).map(Number).filter((n) => Number.isFinite(n));
   }
   if (has("stops") && Array.isArray(body.stops)) out.stops = body.stops;
   return out;

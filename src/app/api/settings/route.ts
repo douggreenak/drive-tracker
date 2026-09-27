@@ -22,6 +22,8 @@ export async function PUT(request: NextRequest) {
         distanceUnit: body.distanceUnit ?? settings.distanceUnit,
         currency: body.currency ?? settings.currency,
         theme: body.theme ?? settings.theme,
+        fuelPricePerGallon: body.fuelPricePerGallon ?? settings.fuelPricePerGallon,
+        defaultPaidBy: body.defaultPaidBy ?? settings.defaultPaidBy,
       },
     });
   } else {
@@ -33,6 +35,8 @@ export async function PUT(request: NextRequest) {
         distanceUnit: body.distanceUnit ?? undefined,
         currency: body.currency ?? undefined,
         theme: body.theme ?? undefined,
+        fuelPricePerGallon: body.fuelPricePerGallon ?? undefined,
+        defaultPaidBy: body.defaultPaidBy ?? undefined,
       },
     });
   }

@@ -10,6 +10,9 @@ export async function GET(request: NextRequest) {
   const favoritesOnly = searchParams.get("favorites") === "true";
   const from = searchParams.get("from");
   const to = searchParams.get("to");
+  // Full fidelity — every field a full cloud restore needs, still without track points (those are
+  // fetched per-trip from `/api/trips/[id]/points`, see that route's doc comment).
+  const full = searchParams.get("full") === "true";
 
   const where: Record<string, unknown> = {};
 
@@ -34,28 +37,31 @@ export async function GET(request: NextRequest) {
   else orderBy.date = order;
 
   // Select only the columns the web pages render — notably excluding the large
-  // `routeEncoded` polyline and the createdAt/updatedAt timestamps.
+  // `routeEncoded`/`matchedPolyline` columns and the createdAt/updatedAt timestamps — unless a
+  // full restore asked for everything.
   const trips = await prisma.trip.findMany({
     where,
     orderBy,
-    select: {
-      id: true,
-      date: true,
-      startAddress: true,
-      endAddress: true,
-      startLat: true,
-      startLng: true,
-      endLat: true,
-      endLng: true,
-      distance: true,
-      duration: true,
-      notes: true,
-      category: true,
-      isFavorite: true,
-      paidBy: true,
-      stops: true,
-      gasEntries: { select: { totalCost: true, paidBy: true } },
-    },
+    select: full
+      ? undefined
+      : {
+          id: true,
+          date: true,
+          startAddress: true,
+          endAddress: true,
+          startLat: true,
+          startLng: true,
+          endLat: true,
+          endLng: true,
+          distance: true,
+          duration: true,
+          notes: true,
+          category: true,
+          isFavorite: true,
+          paidBy: true,
+          stops: true,
+          gasEntries: { select: { totalCost: true, paidBy: true } },
+        },
   });
   return Response.json(trips);
 }
@@ -65,6 +71,7 @@ export async function POST(request: NextRequest) {
   const trip = await prisma.trip.create({
     data: {
       date: new Date(body.date),
+      endDate: body.endDate ? new Date(body.endDate) : null,
       startAddress: body.startAddress,
       endAddress: body.endAddress,
       startLat: body.startLat,
@@ -73,11 +80,27 @@ export async function POST(request: NextRequest) {
       endLng: body.endLng,
       distance: body.distance,
       duration: body.duration,
+      movingSeconds: body.movingSeconds != null ? Math.trunc(Number(body.movingSeconds)) : null,
+      maxSpeed: body.maxSpeed != null ? Number(body.maxSpeed) : null,
+      avgSpeed: body.avgSpeed != null ? Number(body.avgSpeed) : null,
       notes: body.notes || null,
+      name: body.name || null,
       routeEncoded: body.routeEncoded || null,
+      matchedPolyline: body.matchedPolyline || null,
+      matchedFraction: body.matchedFraction != null ? Number(body.matchedFraction) : null,
+      usedRouteMatching: body.usedRouteMatching === true,
       category: body.category || "OTHER",
       isFavorite: body.isFavorite || false,
-      paidBy: body.paidBy === "PARENTS" ? "PARENTS" : "SELF",
+      paidBy: body.paidBy ? String(body.paidBy) : "SELF",
+      vehicleName: body.vehicleName || null,
+      vehicleMpg: body.vehicleMpg != null ? Number(body.vehicleMpg) : null,
+      estimatedGallons: body.estimatedGallons != null ? Number(body.estimatedGallons) : null,
+      scheduledDeparture: body.scheduledDeparture ? new Date(body.scheduledDeparture) : null,
+      scheduledArrival: body.scheduledArrival ? new Date(body.scheduledArrival) : null,
+      journeyId: body.journeyId || null,
+      legIndex: body.legIndex != null ? Math.trunc(Number(body.legIndex)) : 0,
+      legTotal: body.legTotal != null ? Math.trunc(Number(body.legTotal)) : 1,
+      isManualEntry: body.isManualEntry === true,
       stops: Array.isArray(body.stops) ? body.stops : undefined,
     },
   });
@@ -108,7 +131,7 @@ export async function PATCH(request: NextRequest) {
   if ("category" in body) data.category = body.category;
   if ("notes" in body) data.notes = body.notes;
   if ("date" in body) data.date = new Date(body.date);
-  if ("paidBy" in body) data.paidBy = body.paidBy === "PARENTS" ? "PARENTS" : "SELF";
+  if ("paidBy" in body) data.paidBy = body.paidBy ? String(body.paidBy) : "SELF";
   if ("stops" in body && Array.isArray(body.stops)) data.stops = body.stops;
   // Trimming a trip (cutting off a forgotten tail/start) rewrites the geometry + stats + endpoints.
   if ("distance" in body) data.distance = Number(body.distance) || 0;
