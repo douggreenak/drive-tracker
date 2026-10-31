@@ -157,11 +157,11 @@ export default function NewGasEntryPage() {
         <div className="grid grid-cols-2 gap-4 animate-fade-in-up stagger-5">
           <div>
             <label className="block text-sm font-medium mb-1.5" style={{ color: "var(--md-on-surface-variant)" }}>Gallons</label>
-            <input type="number" step="0.01" min="0" value={gallons} onChange={(e) => setGallons(e.target.value)} placeholder="0.00" className="md-text-field" required />
+            <input type="number" step="0.01" min="0.01" value={gallons} onChange={(e) => setGallons(e.target.value)} placeholder="0.00" className="md-text-field" required />
           </div>
           <div>
             <label className="block text-sm font-medium mb-1.5" style={{ color: "var(--md-on-surface-variant)" }}>Price/Gallon</label>
-            <input type="number" step="0.01" min="0" value={pricePerGallon} onChange={(e) => setPricePerGallon(e.target.value)} placeholder="0.00" className="md-text-field" required />
+            <input type="number" step="0.01" min="0.01" value={pricePerGallon} onChange={(e) => setPricePerGallon(e.target.value)} placeholder="0.00" className="md-text-field" required />
           </div>
         </div>
 

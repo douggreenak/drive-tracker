@@ -117,42 +117,89 @@ function statusFor(drive: ScheduledDrive, dep: Date): { label: string; color: st
 
 export default function SchedulePage() {
   const [drives, setDrives] = useState<ScheduledDrive[] | null>(null);
+  const [loadError, setLoadError] = useState("");
+  const [now, setNow] = useState(() => Date.now());
 
   const fetchDrives = useCallback(() => {
-    fetch("/api/scheduled").then((r) => r.json()).then(setDrives).catch(() => setDrives([]));
+    return fetch("/api/scheduled")
+      .then(async (response) => {
+        if (!response.ok) throw new Error("Could not load scheduled drives");
+        return response.json();
+      })
+      .then((data: ScheduledDrive[]) => {
+        setDrives(data);
+        setLoadError("");
+      });
   }, []);
 
-  useEffect(() => { fetchDrives(); }, [fetchDrives]);
+  useEffect(() => {
+    const refresh = () => { void fetchDrives().catch(() => setLoadError("Schedule couldn’t be synced. Check your connection and try again.")); };
+    refresh();
+    const interval = window.setInterval(refresh, 30_000);
+    return () => window.clearInterval(interval);
+  }, [fetchDrives]);
 
   // Cancel keeps the drive visible with a CANCELED status; Restore un-cancels it. The scheduled
   // PATCH route re-validates the whole record, so send back the full drive we already have.
   async function setCanceled(drive: ScheduledDrive, canceled: boolean) {
-    setDrives((prev) => prev?.map((d) => (d.id === drive.id ? { ...d, isCanceled: canceled } : d)) ?? prev);
-    await fetch("/api/scheduled", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...drive, isCanceled: canceled }),
-    }).catch(() => {});
-    fetchDrives();
+    try {
+      const response = await fetch("/api/scheduled", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...drive, isCanceled: canceled }),
+      });
+      if (!response.ok) throw new Error("Could not update scheduled drive");
+      const updated: ScheduledDrive = await response.json();
+      setDrives((prev) => prev?.map((d) => (d.id === drive.id ? updated : d)) ?? prev);
+      setLoadError("");
+    } catch {
+      setLoadError("Schedule couldn’t be updated. Check your connection and try again.");
+    }
   }
 
   // Delete removes the template (and therefore every occurrence). The DELETE route reads the id
   // from the JSON body.
   async function deleteDrive(drive: ScheduledDrive) {
     if (!window.confirm(`Delete “${drive.title}”? This removes the drive and all of its occurrences.`)) return;
-    setDrives((prev) => prev?.filter((d) => d.id !== drive.id) ?? prev);
-    await fetch("/api/scheduled", {
-      method: "DELETE",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id: drive.id }),
-    }).catch(() => {});
-    fetchDrives();
+    try {
+      const response = await fetch("/api/scheduled", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: drive.id }),
+      });
+      if (!response.ok) throw new Error("Could not delete scheduled drive");
+      setDrives((prev) => prev?.filter((d) => d.id !== drive.id) ?? prev);
+      setLoadError("");
+    } catch {
+      setLoadError("Schedule couldn’t be updated. Check your connection and try again.");
+    }
   }
+
+  const activeDrive = (drives ?? [])
+    .filter((drive) => drive.lastStartedAt
+      && (!drive.lastCompletedAt || new Date(drive.lastStartedAt) > new Date(drive.lastCompletedAt))
+      && now - new Date(drive.lastStartedAt).getTime() < Math.max(6 * 60 * 60 * 1000, drive.estimatedTravelTime * 1000 + 2 * 60 * 60 * 1000))
+    .sort((a, b) => new Date(b.lastStartedAt!).getTime() - new Date(a.lastStartedAt!).getTime())[0] ?? null;
+  const activeDriveId = activeDrive?.id;
+
+  useEffect(() => {
+    if (!activeDriveId) return;
+    const interval = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(interval);
+  }, [activeDriveId]);
 
   if (!drives) {
     return (
       <div className="p-6 max-w-4xl mx-auto">
         <div className="skeleton h-8 w-40 rounded mb-6" />
+        {loadError && (
+          <div className="md-card mb-4" role="alert">
+            <p className="text-sm" style={{ color: "var(--md-error)" }}>{loadError}</p>
+            <button type="button" className="md-outlined-button mt-3" onClick={() => { void fetchDrives().catch(() => setLoadError("Schedule couldn’t be synced. Check your connection and try again.")); }}>
+              Retry
+            </button>
+          </div>
+        )}
         {[0, 1, 2].map((i) => <div key={i} className="skeleton h-20 rounded-2xl mb-3" />)}
       </div>
     );
@@ -171,6 +218,16 @@ export default function SchedulePage() {
           {drives.length} scheduled {drives.length === 1 ? "drive" : "drives"} · synced from your iPhone
         </p>
       </div>
+
+      {loadError && (
+        <p role="alert" className="md-card mb-4 text-sm" style={{ color: "var(--md-error)" }}>
+          {loadError}
+        </p>
+      )}
+
+      {activeDrive && (
+        <LiveDriveCard drive={activeDrive} now={now} />
+      )}
 
       {rows.length === 0 ? (
         <div className="md-card text-center py-16 animate-scale-in">
@@ -249,5 +306,85 @@ export default function SchedulePage() {
         </div>
       )}
     </div>
+  );
+}
+
+function LiveDriveCard({ drive, now }: { drive: ScheduledDrive; now: number }) {
+  const startedAt = new Date(drive.lastStartedAt!);
+  const elapsedSeconds = Math.max(0, Math.floor((now - startedAt.getTime()) / 1000));
+  const plannedSeconds = Math.max(drive.estimatedTravelTime, 0);
+  const remainingSeconds = Math.max(plannedSeconds - elapsedSeconds, 0);
+  const progress = plannedSeconds > 0 ? Math.min((elapsedSeconds / plannedSeconds) * 100, 100) : 0;
+  const eta = new Date(startedAt.getTime() + plannedSeconds * 1000);
+  const formatElapsed = (seconds: number) => {
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    return hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`;
+  };
+  const timeLabel = elapsedSeconds >= plannedSeconds ? `Past estimate · ${format(eta, "h:mm a")}` : `About ${formatElapsed(remainingSeconds)} left`;
+
+  return (
+    <section className="md-card mb-6 animate-fade-in-up" aria-label="Live drive">
+      <div className="flex items-start justify-between gap-3 flex-wrap mb-4">
+        <div className="flex items-center gap-2">
+          <span className="relative flex h-3 w-3" aria-hidden="true">
+            <span className="absolute inline-flex h-full w-full rounded-full opacity-50 animate-ping" style={{ background: "var(--md-success)" }} />
+            <span className="relative inline-flex h-3 w-3 rounded-full" style={{ background: "var(--md-success)" }} />
+          </span>
+          <div>
+            <h2 className="font-semibold">Drive in progress</h2>
+            <p className="text-sm" style={{ color: "var(--md-on-surface-variant)" }}>{drive.title}</p>
+          </div>
+        </div>
+        <span className="md-badge" style={{ background: "var(--md-primary-container)", color: "var(--md-on-primary-container)" }}>
+          Started {format(startedAt, "h:mm a")}
+        </span>
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
+        <div>
+          <p className="text-xs mb-1" style={{ color: "var(--md-on-surface-variant)" }}>From</p>
+          <p className="font-medium">{drive.startAddress}</p>
+        </div>
+        <div>
+          <p className="text-xs mb-1" style={{ color: "var(--md-on-surface-variant)" }}>To</p>
+          <p className="font-medium">{drive.endAddress}</p>
+        </div>
+      </div>
+
+      {drive.stops && drive.stops.length > 0 && (
+        <div className="flex flex-wrap gap-2 mb-4" aria-label="Stops along the route">
+          {drive.stops.map((stop, index) => (
+            <span key={index} className="md-badge" style={{ background: "var(--md-tertiary-container)", color: "var(--md-on-surface)" }}>
+              Stop {index + 1}: {stop.address?.split(",")[0] || `${stop.lat.toFixed(3)}, ${stop.lng.toFixed(3)}`}
+            </span>
+          ))}
+        </div>
+      )}
+
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
+        {[
+          { label: "Elapsed", value: formatElapsed(elapsedSeconds) },
+          { label: "Est. arrival", value: format(eta, "h:mm a") },
+          { label: "Time estimate", value: `${Math.round(progress)}%` },
+          { label: "Category", value: CATEGORY_LABELS[drive.category] || drive.category },
+        ].map((item) => (
+          <div key={item.label} className="rounded-xl p-3" style={{ background: "var(--md-surface-container)" }}>
+            <p className="text-xs" style={{ color: "var(--md-on-surface-variant)" }}>{item.label}</p>
+            <p className="font-semibold mt-1">{item.value}</p>
+          </div>
+        ))}
+      </div>
+
+      <div className="h-2 rounded-full overflow-hidden mb-2" style={{ background: "var(--md-surface-container-high)" }}
+        role="progressbar" aria-label="Elapsed time against the drive estimate" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(progress)}>
+        <div className="h-full rounded-full transition-[width] duration-1000" style={{ width: `${progress}%`, background: "var(--md-primary)" }} />
+      </div>
+      <p className="text-xs" style={{ color: "var(--md-on-surface-variant)" }}>
+        {timeLabel} · {REPEAT_LABELS[drive.repeatRule] || drive.repeatRule} schedule
+        {drive.vehicleName ? ` · ${drive.vehicleName}` : ""}
+        {` · ${drive.paidBy === "PARENTS" ? "Parents pay" : "I pay"}`}
+      </p>
+    </section>
   );
 }

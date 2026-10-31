@@ -1,6 +1,8 @@
 import { prisma } from "@/lib/db";
 import { NextRequest } from "next/server";
 
+const FUEL_TYPES = ["REGULAR", "MIDGRADE", "PREMIUM", "DIESEL"];
+
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
   const paidBy = searchParams.get("paidBy");
@@ -35,17 +37,40 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
-  const body = await request.json();
+  const body = await request.json().catch(() => null);
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return Response.json({ error: "Invalid body" }, { status: 400 });
+  }
+
+  const gallons = Number(body.gallons);
+  const pricePerGallon = Number(body.pricePerGallon);
+  if (!Number.isFinite(gallons) || gallons <= 0 || !Number.isFinite(pricePerGallon) || pricePerGallon <= 0) {
+    return Response.json({ error: "Gallons and price must be greater than zero" }, { status: 400 });
+  }
+  if (typeof body.date !== "string" || !Number.isFinite(Date.parse(body.date))) {
+    return Response.json({ error: "Invalid date" }, { status: 400 });
+  }
+  if (body.paidBy !== "SELF" && body.paidBy !== "PARENTS") {
+    return Response.json({ error: "Invalid payer" }, { status: 400 });
+  }
+  if (body.fuelType !== undefined && !FUEL_TYPES.includes(body.fuelType)) {
+    return Response.json({ error: "Invalid fuel type" }, { status: 400 });
+  }
+  const odometer = body.odometer == null || body.odometer === "" ? null : Number(body.odometer);
+  if (odometer !== null && (!Number.isFinite(odometer) || odometer < 0)) {
+    return Response.json({ error: "Invalid odometer" }, { status: 400 });
+  }
+
   const entry = await prisma.gasEntry.create({
     data: {
       date: new Date(body.date),
-      gallons: body.gallons,
-      pricePerGallon: body.pricePerGallon,
-      totalCost: body.gallons * body.pricePerGallon,
+      gallons,
+      pricePerGallon,
+      totalCost: gallons * pricePerGallon,
       paidBy: body.paidBy,
       fuelType: body.fuelType || "REGULAR",
       stationName: body.stationName || null,
-      odometer: body.odometer || null,
+      odometer,
       vehicleName: body.vehicleName || null,
       tripId: body.tripId || null,
     },
@@ -72,8 +97,7 @@ export async function PATCH(request: NextRequest) {
   if (body.paidBy !== undefined && body.paidBy !== "SELF" && body.paidBy !== "PARENTS") {
     return Response.json({ error: "Invalid payer" }, { status: 400 });
   }
-  const fuelTypes = ["REGULAR", "MIDGRADE", "PREMIUM", "DIESEL"];
-  if (body.fuelType !== undefined && !fuelTypes.includes(body.fuelType)) {
+  if (body.fuelType !== undefined && !FUEL_TYPES.includes(body.fuelType)) {
     return Response.json({ error: "Invalid fuel type" }, { status: 400 });
   }
 

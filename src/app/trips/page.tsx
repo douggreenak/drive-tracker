@@ -125,6 +125,10 @@ export default function TripsPage() {
       if (!response.ok) throw new Error("Could not delete trip");
       setTrips((prev) => prev.filter((t) => t.id !== deleteId));
       setTotal((prev) => Math.max(prev - 1, 0));
+      if (trips.length === 1 && page > 1) {
+        setLoading(true);
+        setPage((current) => current - 1);
+      }
       setDeleteId(null);
       toast("Trip deleted", "info");
     } catch {

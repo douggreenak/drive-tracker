@@ -31,6 +31,8 @@ interface Trip {
   endLng: number;
   distance: number;
   duration: number;
+  movingSeconds: number | null;
+  avgSpeed: number | null;
   notes: string | null;
   category: string;
   isFavorite: boolean;
@@ -152,7 +154,11 @@ export default function TripDetailPage({ params }: { params: Promise<{ id: strin
   }
 
   const gasTotal = trip.gasEntries.reduce((s, g) => s + g.totalCost, 0);
-  const avgSpeed = trip.duration > 0 ? convertSpeed(trip.distance / (trip.duration / 60), distanceUnit) : 0;
+  const avgSpeedMph = trip.avgSpeed
+    ?? (trip.movingSeconds && trip.movingSeconds > 0
+      ? trip.distance / (trip.movingSeconds / 3600)
+      : trip.duration > 0 ? trip.distance / (trip.duration / 60) : 0);
+  const avgSpeed = convertSpeed(avgSpeedMph, distanceUnit);
 
   return (
     <div className="p-6 max-w-3xl mx-auto page-enter">
