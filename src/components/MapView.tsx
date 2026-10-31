@@ -31,6 +31,10 @@ interface MapViewProps {
     /// Intermediate stops to mark along the route.
     stops?: Array<{ address?: string; lat: number; lng: number }> | null;
   }>;
+  trackPlayback?: {
+    points: [number, number][];
+    index: number;
+  } | null;
   interactive?: boolean;
 }
 
@@ -61,11 +65,14 @@ function decodePolyline(encoded: string): [number, number][] {
 export default function MapView({
   onRouteSelect,
   routes,
+  trackPlayback = null,
   interactive = true,
 }: MapViewProps) {
   const mapRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<L.Map | null>(null);
   const routesLayerRef = useRef<L.LayerGroup | null>(null);
+  const playbackLineRef = useRef<L.Polyline | null>(null);
+  const playbackMarkerRef = useRef<L.Marker | null>(null);
   const onRouteSelectRef = useRef(onRouteSelect);
   const markersRef = useRef<L.Marker[]>([]);
   const lineRef = useRef<L.Polyline | null>(null);
@@ -218,6 +225,48 @@ export default function MapView({
       map.setView(DEFAULT_CENTER, DEFAULT_ZOOM);
     }
   }, [mapReady, routes]);
+
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    if (!mapReady || !map) return;
+    if (!trackPlayback || trackPlayback.points.length === 0) {
+      playbackLineRef.current?.remove();
+      playbackMarkerRef.current?.remove();
+      playbackLineRef.current = null;
+      playbackMarkerRef.current = null;
+      return;
+    }
+
+    const lastIndex = Math.min(Math.max(trackPlayback.index, 0), trackPlayback.points.length - 1);
+    const currentPoint = trackPlayback.points[lastIndex];
+    const segment = trackPlayback.points.slice(0, lastIndex + 1);
+    const maxVertices = 500;
+    const stride = Math.max(1, Math.ceil(segment.length / maxVertices));
+    const visiblePath = segment.filter((_, index) => index % stride === 0);
+    if (visiblePath.at(-1) !== currentPoint) visiblePath.push(currentPoint);
+
+    if (!playbackLineRef.current) {
+      playbackLineRef.current = L.polyline(visiblePath, {
+        color: "var(--md-primary, #1a6b52)",
+        weight: 5,
+        opacity: 1,
+      }).addTo(map);
+    } else {
+      playbackLineRef.current.setLatLngs(visiblePath);
+    }
+
+    if (!playbackMarkerRef.current) {
+      const icon = L.divIcon({
+        className: "custom-marker",
+        html: '<div style="width:20px;height:20px;border-radius:50%;background:#1976d2;border:3px solid white;box-shadow:0 2px 8px rgba(0,0,0,0.45)"></div>',
+        iconSize: [20, 20],
+        iconAnchor: [10, 10],
+      });
+      playbackMarkerRef.current = L.marker(currentPoint, { icon, zIndexOffset: 1000 }).addTo(map);
+    } else {
+      playbackMarkerRef.current.setLatLng(currentPoint);
+    }
+  }, [mapReady, trackPlayback]);
 
   return (
     <div className="relative w-full h-full min-h-[400px]">

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, use } from "react";
+import { useEffect, useMemo, useRef, useState, use } from "react";
 import Link from "next/link";
 import dynamic from "next/dynamic";
 import { format } from "date-fns";
@@ -42,6 +42,13 @@ interface Trip {
   gasEntries: GasEntry[];
 }
 
+interface TrackPoint {
+  seq: number;
+  t: string;
+  lat: number;
+  lng: number;
+}
+
 const CATEGORY_LABELS: Record<string, string> = {
   COMMUTE: "Commute", ERRAND: "Errand", ROAD_TRIP: "Road Trip",
   SCHOOL: "School", WORK: "Work", LEISURE: "Leisure", OTHER: "Other",
@@ -49,9 +56,19 @@ const CATEGORY_LABELS: Record<string, string> = {
 
 export default function TripDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
+  return <TripDetail key={id} tripId={id} />;
+}
+
+function TripDetail({ tripId: id }: { tripId: string }) {
   const [trip, setTrip] = useState<Trip | null>(null);
   const [notFound, setNotFound] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [trackPoints, setTrackPoints] = useState<TrackPoint[] | null>(null);
+  const [trackError, setTrackError] = useState("");
+  const [playbackProgress, setPlaybackProgress] = useState(0);
+  const [playbackSpeed, setPlaybackSpeed] = useState(1);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const playbackProgressRef = useRef(0);
   const { toast } = useToast();
   const distanceUnit = useDistanceUnit();
 
@@ -61,6 +78,40 @@ export default function TripDetailPage({ params }: { params: Promise<{ id: strin
       .then(setTrip)
       .catch(() => setNotFound(true));
   }, [id]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    fetch(`/api/trips/${id}/points`, { signal: controller.signal })
+      .then(async (response) => {
+        if (!response.ok) throw new Error("Could not load GPS track");
+        return response.json();
+      })
+      .then((data: TrackPoint[]) => {
+        setTrackPoints(data.filter((point) =>
+          Number.isFinite(point.lat) && Number.isFinite(point.lng)
+          && point.lat >= -90 && point.lat <= 90
+          && point.lng >= -180 && point.lng <= 180
+        ));
+      })
+      .catch((error: unknown) => {
+        if (error instanceof DOMException && error.name === "AbortError") return;
+        setTrackError("The recorded route couldn’t be loaded.");
+        setTrackPoints([]);
+      });
+    return () => controller.abort();
+  }, [id]);
+
+  const trackPointCount = trackPoints?.length ?? 0;
+  useEffect(() => {
+    if (!isPlaying || trackPointCount < 2 || playbackProgressRef.current >= 1) return;
+    const interval = window.setInterval(() => {
+      const progress = Math.min(playbackProgressRef.current + playbackSpeed / 240, 1);
+      playbackProgressRef.current = progress;
+      setPlaybackProgress(progress);
+      if (progress >= 1) setIsPlaying(false);
+    }, 250);
+    return () => window.clearInterval(interval);
+  }, [isPlaying, trackPointCount, playbackSpeed]);
 
   async function toggleFavorite() {
     if (!trip) return;
@@ -133,6 +184,11 @@ export default function TripDetailPage({ params }: { params: Promise<{ id: strin
     return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
   }
 
+  const playbackCoordinates = useMemo(
+    () => trackPoints?.map((point) => [point.lat, point.lng] as [number, number]) ?? [],
+    [trackPoints],
+  );
+
   if (notFound) {
     return (
       <div className="p-6 max-w-3xl mx-auto">
@@ -159,6 +215,32 @@ export default function TripDetailPage({ params }: { params: Promise<{ id: strin
       ? trip.distance / (trip.movingSeconds / 3600)
       : trip.duration > 0 ? trip.distance / (trip.duration / 60) : 0);
   const avgSpeed = convertSpeed(avgSpeedMph, distanceUnit);
+  const currentTrackIndex = trackPoints?.length
+    ? Math.min(Math.floor(playbackProgress * (trackPoints.length - 1)), trackPoints.length - 1)
+    : 0;
+  const currentTrackPoint = trackPoints?.[currentTrackIndex];
+  const trackPlayback = trackPoints && trackPoints.length > 1
+    ? {
+      points: playbackCoordinates,
+      index: currentTrackIndex,
+    }
+    : null;
+
+  function setPlaybackPosition(value: number) {
+    setIsPlaying(false);
+    const progress = value / 1000;
+    playbackProgressRef.current = progress;
+    setPlaybackProgress(progress);
+  }
+
+  function togglePlayback() {
+    if (!trackPoints || trackPoints.length < 2) return;
+    if (playbackProgress >= 1) {
+      playbackProgressRef.current = 0;
+      setPlaybackProgress(0);
+    }
+    setIsPlaying((playing) => !playing);
+  }
 
   return (
     <div className="p-6 max-w-3xl mx-auto page-enter">
@@ -207,8 +289,65 @@ export default function TripDetailPage({ params }: { params: Promise<{ id: strin
           endLat: trip.endLat, endLng: trip.endLng,
           startAddress: trip.startAddress, endAddress: trip.endAddress,
           routeEncoded: trip.routeEncoded, stops: trip.stops,
-        }]} />
+        }]} trackPlayback={trackPlayback} />
       </div>
+
+      <section className="md-card mb-4" aria-label="Trip playback">
+        <div className="flex items-center justify-between gap-3 flex-wrap mb-3">
+          <div>
+            <h2 className="font-semibold">Trip playback</h2>
+            <p className="text-xs mt-1" style={{ color: "var(--md-on-surface-variant)" }}>
+              {trackPoints === null ? "Loading recorded route…" : trackPoints.length > 1
+                ? `${trackPoints.length.toLocaleString()} GPS points · full trip in about ${60 / playbackSpeed} seconds`
+                : "No GPS recording is available for this trip."}
+            </p>
+          </div>
+          {trackPoints && trackPoints.length > 1 && (
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                className="md-filled-button"
+                onClick={togglePlayback}
+                aria-label={isPlaying ? "Pause trip playback" : playbackProgress >= 1 ? "Replay trip" : "Play trip"}
+              >
+                {isPlaying ? "Pause" : playbackProgress >= 1 ? "Replay" : "Play"}
+              </button>
+              <label className="text-xs font-medium flex items-center gap-2" style={{ color: "var(--md-on-surface-variant)" }}>
+                Speed
+                <select
+                  className="md-chip !cursor-pointer"
+                  value={playbackSpeed}
+                  onChange={(event) => setPlaybackSpeed(Number(event.target.value))}
+                  aria-label="Playback speed"
+                >
+                  {[1, 2, 4].map((speed) => <option key={speed} value={speed}>{speed}×</option>)}
+                </select>
+              </label>
+            </div>
+          )}
+        </div>
+        {trackError && <p role="alert" className="text-sm mb-3" style={{ color: "var(--md-error)" }}>{trackError}</p>}
+        {trackPoints && trackPoints.length > 1 && currentTrackPoint && (
+          <>
+            <input
+              type="range"
+              min="0"
+              max="1000"
+              step="1"
+              value={Math.round(playbackProgress * 1000)}
+              onChange={(event) => setPlaybackPosition(Number(event.target.value))}
+              className="w-full accent-[var(--md-primary)]"
+              aria-label="Seek through recorded trip"
+              aria-valuetext={`${Math.round(playbackProgress * 100)} percent`}
+            />
+            <div className="flex justify-between gap-3 text-xs" style={{ color: "var(--md-on-surface-variant)" }}>
+              <span>{format(new Date(trackPoints[0].t), "h:mm:ss a")}</span>
+              <span>Point {currentTrackIndex + 1} of {trackPoints.length.toLocaleString()} · {format(new Date(currentTrackPoint.t), "h:mm:ss a")}</span>
+              <span>{format(new Date(trackPoints[trackPoints.length - 1].t), "h:mm:ss a")}</span>
+            </div>
+          </>
+        )}
+      </section>
 
       {/* Route */}
       <div className="md-card mb-4 animate-fade-in-up">
