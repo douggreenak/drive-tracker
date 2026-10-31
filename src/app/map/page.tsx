@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import dynamic from "next/dynamic";
+import { formatDistance, useDistanceUnit } from "@/lib/useDistanceUnit";
 
 const MapView = dynamic(() => import("@/components/MapView"), { ssr: false });
 
@@ -15,6 +16,7 @@ interface Trip {
   endAddress: string;
   distance: number;
   category: string;
+  routeEncoded?: string | null;
 }
 
 const CATEGORY_LABELS: Record<string, string> = {
@@ -25,13 +27,24 @@ const CATEGORY_LABELS: Record<string, string> = {
 export default function MapPage() {
   const [trips, setTrips] = useState<Trip[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("");
+  const distanceUnit = useDistanceUnit();
 
   useEffect(() => {
-    fetch("/api/trips")
-      .then((r) => r.json())
-      .then((data) => { setTrips(data); setLoading(false); })
-      .catch(() => setLoading(false));
+    const controller = new AbortController();
+    fetch("/api/trips?includeRoute=true", { signal: controller.signal })
+      .then((r) => {
+        if (!r.ok) throw new Error("Could not load trips");
+        return r.json();
+      })
+      .then((data) => { setTrips(data); setLoadError(""); setLoading(false); })
+      .catch((error: unknown) => {
+        if (error instanceof DOMException && error.name === "AbortError") return;
+        setLoadError("Trips couldn’t be loaded. Check your connection and try again.");
+        setLoading(false);
+      });
+    return () => controller.abort();
   }, []);
 
   const filtered = categoryFilter
@@ -47,7 +60,7 @@ export default function MapPage() {
       <div className="mb-4 animate-fade-in-up">
         <h1 className="text-2xl font-bold tracking-tight">Trip Map</h1>
         <p className="text-sm mt-0.5" style={{ color: "var(--md-on-surface-variant)" }}>
-          {filtered.length} trip{filtered.length !== 1 ? "s" : ""} · {totalDistance.toFixed(1)} mi total
+          {filtered.length} trip{filtered.length !== 1 ? "s" : ""} · {formatDistance(totalDistance, distanceUnit)} total
         </p>
       </div>
 
@@ -85,6 +98,8 @@ export default function MapPage() {
             <p className="text-sm" style={{ color: "var(--md-on-surface-variant)" }}>Loading map...</p>
           </div>
         </div>
+      ) : loadError ? (
+        <div className="md-card" role="alert">{loadError}</div>
       ) : (
         <div className="h-[calc(100vh-220px)] min-h-[400px] rounded-2xl overflow-hidden md-elevation-2 animate-scale-in">
           <MapView routes={filtered} interactive={false} />

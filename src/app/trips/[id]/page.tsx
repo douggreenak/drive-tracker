@@ -6,6 +6,7 @@ import dynamic from "next/dynamic";
 import { format } from "date-fns";
 import { useToast } from "@/components/Toast";
 import ConfirmDialog from "@/components/ConfirmDialog";
+import { convertSpeed, formatDistance, useDistanceUnit } from "@/lib/useDistanceUnit";
 
 const MapView = dynamic(() => import("@/components/MapView"), { ssr: false });
 
@@ -50,6 +51,7 @@ export default function TripDetailPage({ params }: { params: Promise<{ id: strin
   const [notFound, setNotFound] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const { toast } = useToast();
+  const distanceUnit = useDistanceUnit();
 
   useEffect(() => {
     fetch(`/api/trips/${id}`)
@@ -61,47 +63,67 @@ export default function TripDetailPage({ params }: { params: Promise<{ id: strin
   async function toggleFavorite() {
     if (!trip) return;
     const next = !trip.isFavorite;
-    setTrip({ ...trip, isFavorite: next });
-    await fetch("/api/trips", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id: trip.id, isFavorite: next }),
-    });
-    toast(next ? "Added to favorites" : "Removed from favorites");
+    try {
+      const response = await fetch("/api/trips", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: trip.id, isFavorite: next }),
+      });
+      if (!response.ok) throw new Error("Could not update favorite");
+      setTrip({ ...trip, isFavorite: next });
+      toast(next ? "Added to favorites" : "Removed from favorites");
+    } catch {
+      toast("Could not update favorite", "error");
+    }
   }
 
   async function togglePaidBy() {
     if (!trip) return;
     const next = trip.paidBy === "PARENTS" ? "SELF" : "PARENTS";
-    setTrip({ ...trip, paidBy: next });
-    await fetch("/api/trips", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id: trip.id, paidBy: next }),
-    });
-    toast(next === "PARENTS" ? "Parents pay for this drive" : "You pay for this drive");
+    try {
+      const response = await fetch("/api/trips", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: trip.id, paidBy: next }),
+      });
+      if (!response.ok) throw new Error("Could not update payer");
+      setTrip({ ...trip, paidBy: next });
+      toast(next === "PARENTS" ? "Parents pay for this drive" : "You pay for this drive");
+    } catch {
+      toast("Could not update payer", "error");
+    }
   }
 
   async function updateField(patch: Record<string, unknown>) {
     if (!trip) return;
-    setTrip({ ...trip, ...patch } as Trip);
-    await fetch("/api/trips", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id: trip.id, ...patch }),
-    });
-    toast("Saved");
+    try {
+      const response = await fetch("/api/trips", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: trip.id, ...patch }),
+      });
+      if (!response.ok) throw new Error("Could not update trip");
+      setTrip({ ...trip, ...patch } as Trip);
+      toast("Saved");
+    } catch {
+      toast("Could not save trip changes", "error");
+    }
   }
 
   async function deleteTrip() {
     if (!trip) return;
-    await fetch("/api/trips", {
-      method: "DELETE",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id: trip.id }),
-    });
-    toast("Trip deleted", "info");
-    window.location.assign("/trips");
+    try {
+      const response = await fetch("/api/trips", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: trip.id }),
+      });
+      if (!response.ok) throw new Error("Could not delete trip");
+      toast("Trip deleted", "info");
+      window.location.assign("/trips");
+    } catch {
+      toast("Could not delete trip", "error");
+    }
   }
 
   function formatDuration(minutes: number) {
@@ -130,7 +152,7 @@ export default function TripDetailPage({ params }: { params: Promise<{ id: strin
   }
 
   const gasTotal = trip.gasEntries.reduce((s, g) => s + g.totalCost, 0);
-  const avgSpeed = trip.duration > 0 ? (trip.distance / (trip.duration / 60)) : 0;
+  const avgSpeed = trip.duration > 0 ? convertSpeed(trip.distance / (trip.duration / 60), distanceUnit) : 0;
 
   return (
     <div className="p-6 max-w-3xl mx-auto page-enter">
@@ -207,9 +229,9 @@ export default function TripDetailPage({ params }: { params: Promise<{ id: strin
       {/* Stats */}
       <div className="grid grid-cols-3 gap-3 mb-4">
         {[
-          { label: "Distance", value: `${trip.distance} mi` },
+          { label: "Distance", value: formatDistance(trip.distance, distanceUnit) },
           { label: "Duration", value: formatDuration(trip.duration) },
-          { label: "Avg Speed", value: `${avgSpeed.toFixed(0)} mph` },
+          { label: "Avg Speed", value: `${avgSpeed.toFixed(0)} ${distanceUnit === "km" ? "km/h" : "mph"}` },
         ].map((s, i) => (
           <div key={s.label} className="md-card !p-3 animate-fade-in-up" style={{ animationDelay: `${i * 30}ms` }}>
             <p className="text-xs" style={{ color: "var(--md-on-surface-variant)" }}>{s.label}</p>

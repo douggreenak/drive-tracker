@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { formatDistance, useDistanceUnit } from "@/lib/useDistanceUnit";
 
 interface MonthPoint {
   label: string;
@@ -85,6 +86,7 @@ export default function InsightsPage() {
   const [data, setData] = useState<Analytics | null>(null);
   const [scheduled, setScheduled] = useState<ScheduledLite[] | null>(null);
   const [metric, setMetric] = useState<Metric>("spent");
+  const distanceUnit = useDistanceUnit();
 
   useEffect(() => {
     fetch("/api/analytics").then((r) => r.json()).then(setData).catch(() => setData(null));
@@ -105,7 +107,9 @@ export default function InsightsPage() {
   }
 
   const active = METRICS.find((m) => m.key === metric)!;
-  const fmt = (n: number) => `${active.prefix ?? ""}${metric === "spent" ? n.toFixed(2) : n}${active.suffix ?? ""}`;
+  const fmt = (n: number) => metric === "miles"
+    ? formatDistance(n, distanceUnit)
+    : `${active.prefix ?? ""}${metric === "spent" ? n.toFixed(2) : n}${active.suffix ?? ""}`;
   const totalSpent = data.byVehicle.reduce((s, v) => s + v.spent, 0);
   const onTime = computeOnTime(scheduled);
 
@@ -131,12 +135,12 @@ export default function InsightsPage() {
                 onClick={() => setMetric(m.key)}
                 className={`md-chip ${metric === m.key ? "active" : ""}`}
               >
-                {m.label}
+                {m.key === "miles" ? (distanceUnit === "km" ? "Distance (km)" : "Miles") : m.label}
               </button>
             ))}
           </div>
         </div>
-        <BarChart points={data.monthly.map((p) => ({ label: p.label, value: p[metric] }))} format={fmt} />
+        <BarChart points={data.monthly.map((p) => ({ label: p.label, value: metric === "miles" && distanceUnit === "km" ? p.miles * 1.60934 : p[metric] }))} format={fmt} />
       </div>
 
       {/* Who's paying, stacked by month */}
@@ -206,7 +210,7 @@ export default function InsightsPage() {
         {/* By category */}
         <div className="md-card animate-fade-in-up" style={{ animationDelay: "150ms" }}>
           <h3 className="text-sm font-medium mb-4" style={{ color: "var(--md-on-surface-variant)" }}>
-            Miles by category
+            {distanceUnit === "km" ? "Distance by category" : "Miles by category"}
           </h3>
           {data.byCategory.length === 0 ? (
             <Empty />
@@ -216,7 +220,9 @@ export default function InsightsPage() {
                 const max = Math.max(...data.byCategory.map((x) => x.miles), 1);
                 return (
                   <RowBar key={c.category} label={CATEGORY_LABELS[c.category] || c.category}
-                          value={c.miles} total={max} display={`${c.miles} mi`}
+                          value={distanceUnit === "km" ? c.miles * 1.60934 : c.miles}
+                          total={distanceUnit === "km" ? max * 1.60934 : max}
+                          display={formatDistance(c.miles, distanceUnit)}
                           sub={`${c.trips} ${c.trips === 1 ? "trip" : "trips"}`} color="var(--md-tertiary)" />
                 );
               })}

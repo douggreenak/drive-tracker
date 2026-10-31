@@ -6,6 +6,8 @@ import { format } from "date-fns";
 import { useToast } from "@/components/Toast";
 import ConfirmDialog from "@/components/ConfirmDialog";
 import { SkeletonRow } from "@/components/Skeleton";
+import { localDateBoundary } from "@/lib/date-input";
+import { formatDistance, useDistanceUnit } from "@/lib/useDistanceUnit";
 
 interface Trip {
   id: string;
@@ -39,8 +41,15 @@ export default function TripsPage() {
   const [sort, setSort] = useState("date");
   const [categoryFilter, setCategoryFilter] = useState("");
   const [favoritesOnly, setFavoritesOnly] = useState(false);
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+  const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
+  const pageSize = 25;
+  const [requestError, setRequestError] = useState("");
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const { toast } = useToast();
+  const distanceUnit = useDistanceUnit();
 
   const fetchTrips = useCallback(() => {
     const params = new URLSearchParams();
@@ -48,36 +57,79 @@ export default function TripsPage() {
     if (sort !== "date") params.set("sort", sort);
     if (categoryFilter) params.set("category", categoryFilter);
     if (favoritesOnly) params.set("favorites", "true");
-    fetch(`/api/trips?${params}`)
-      .then((r) => r.json())
-      .then((data) => { setTrips(data); setLoading(false); })
-      .catch(() => setLoading(false));
-  }, [search, sort, categoryFilter, favoritesOnly]);
+    const fromBoundary = localDateBoundary(from);
+    const toBoundary = localDateBoundary(to, true);
+    if (fromBoundary) params.set("from", fromBoundary);
+    if (toBoundary) params.set("to", toBoundary);
+    params.set("page", String(page));
+    params.set("pageSize", String(pageSize));
+    const controller = new AbortController();
+    fetch(`/api/trips?${params}`, { signal: controller.signal })
+      .then(async (r) => {
+        if (!r.ok) throw new Error("Could not load trips");
+        return r.json();
+      })
+      .then((data) => {
+        setTrips(data.items);
+        setTotal(data.total);
+        setRequestError("");
+        setLoading(false);
+      })
+      .catch((error: unknown) => {
+        if (error instanceof DOMException && error.name === "AbortError") return;
+        setRequestError("Trips couldn’t be loaded. Check your connection and try again.");
+        setLoading(false);
+      });
+    return () => controller.abort();
+  }, [search, sort, categoryFilter, favoritesOnly, from, to, page]);
 
-  useEffect(() => { fetchTrips(); }, [fetchTrips]);
+  useEffect(() => { return fetchTrips(); }, [fetchTrips]);
+
+  function resetPage(action: () => void) {
+    setLoading(true);
+    setRequestError("");
+    action();
+    setPage(1);
+  }
+
+  function goToPage(nextPage: number) {
+    setLoading(true);
+    setPage(nextPage);
+  }
 
   async function toggleFavorite(id: string, current: boolean) {
-    await fetch("/api/trips", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id, isFavorite: !current }),
-    });
-    setTrips((prev) =>
-      prev.map((t) => (t.id === id ? { ...t, isFavorite: !current } : t))
-    );
-    toast(!current ? "Added to favorites" : "Removed from favorites");
+    try {
+      const response = await fetch("/api/trips", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, isFavorite: !current }),
+      });
+      if (!response.ok) throw new Error("Could not update favorite");
+      setTrips((prev) =>
+        prev.map((t) => (t.id === id ? { ...t, isFavorite: !current } : t))
+      );
+      toast(!current ? "Added to favorites" : "Removed from favorites");
+    } catch {
+      toast("Could not update favorite", "error");
+    }
   }
 
   async function deleteTrip() {
     if (!deleteId) return;
-    await fetch("/api/trips", {
-      method: "DELETE",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id: deleteId }),
-    });
-    setTrips((prev) => prev.filter((t) => t.id !== deleteId));
-    setDeleteId(null);
-    toast("Trip deleted", "info");
+    try {
+      const response = await fetch("/api/trips", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: deleteId }),
+      });
+      if (!response.ok) throw new Error("Could not delete trip");
+      setTrips((prev) => prev.filter((t) => t.id !== deleteId));
+      setTotal((prev) => Math.max(prev - 1, 0));
+      setDeleteId(null);
+      toast("Trip deleted", "info");
+    } catch {
+      toast("Could not delete trip", "error");
+    }
   }
 
   function formatDuration(minutes: number) {
@@ -91,7 +143,7 @@ export default function TripsPage() {
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Trips</h1>
           <p className="text-sm mt-0.5" style={{ color: "var(--md-on-surface-variant)" }}>
-            {trips.length} trip{trips.length !== 1 ? "s" : ""} logged
+            {total} trip{total !== 1 ? "s" : ""} found
           </p>
         </div>
         <Link href="/trips/new" className="md-filled-button">
@@ -107,17 +159,27 @@ export default function TripsPage() {
           <input
             type="text"
             value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            onChange={(e) => resetPage(() => setSearch(e.target.value))}
             placeholder="Search trips..."
             className="md-text-field !pl-10 !py-3"
           />
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <label className="text-xs font-medium" style={{ color: "var(--md-on-surface-variant)" }}>
+            From
+            <input type="date" value={from} max={to || undefined} onChange={(e) => resetPage(() => setFrom(e.target.value))} className="md-text-field !py-2 mt-1" />
+          </label>
+          <label className="text-xs font-medium" style={{ color: "var(--md-on-surface-variant)" }}>
+            To
+            <input type="date" value={to} min={from || undefined} onChange={(e) => resetPage(() => setTo(e.target.value))} className="md-text-field !py-2 mt-1" />
+          </label>
         </div>
         <div className="flex gap-2 flex-wrap items-center">
           <div className="flex gap-1.5">
             {SORT_OPTIONS.map((opt) => (
               <button
                 key={opt.value}
-                onClick={() => setSort(opt.value)}
+                onClick={() => resetPage(() => setSort(opt.value))}
                 className={`md-chip ${sort === opt.value ? "active" : ""}`}
               >
                 {opt.label}
@@ -126,14 +188,14 @@ export default function TripsPage() {
           </div>
           <div className="w-px h-6 mx-1" style={{ background: "var(--md-outline-variant)" }} />
           <button
-            onClick={() => setFavoritesOnly(!favoritesOnly)}
+            onClick={() => resetPage(() => setFavoritesOnly(!favoritesOnly))}
             className={`md-chip ${favoritesOnly ? "active" : ""}`}
           >
             ★ Favorites
           </button>
           <select
             value={categoryFilter}
-            onChange={(e) => setCategoryFilter(e.target.value)}
+            onChange={(e) => resetPage(() => setCategoryFilter(e.target.value))}
             className="md-chip !border !cursor-pointer"
             style={{ background: categoryFilter ? "var(--md-secondary-container)" : undefined }}
           >
@@ -146,6 +208,7 @@ export default function TripsPage() {
       </div>
 
       {/* Trip List */}
+      {requestError && <p role="alert" className="mb-4 text-sm" style={{ color: "var(--md-error)" }}>{requestError}</p>}
       {loading ? (
         <div className="space-y-3">
           {[0, 1, 2].map((i) => <SkeletonRow key={i} />)}
@@ -157,9 +220,9 @@ export default function TripsPage() {
           </svg>
           <p className="font-medium mb-1">No trips yet</p>
           <p className="text-sm mb-5" style={{ color: "var(--md-on-surface-variant)" }}>
-            {search ? "Try a different search" : "Start tracking your drives"}
+            {search || from || to || categoryFilter || favoritesOnly ? "Try changing or clearing your filters" : "Start tracking your drives"}
           </p>
-          {!search && (
+          {!search && !from && !to && !categoryFilter && !favoritesOnly && (
             <Link href="/trips/new" className="md-filled-button">Log Your First Trip</Link>
           )}
         </div>
@@ -197,7 +260,7 @@ export default function TripsPage() {
                       {trip.paidBy === "PARENTS" ? "Parents" : "Me"}
                     </span>
                     <span className="text-xs" style={{ color: "var(--md-on-surface-variant)" }}>
-                      {trip.distance} mi · {formatDuration(trip.duration)}
+                      {formatDistance(trip.distance, distanceUnit)} · {formatDuration(trip.duration)}
                     </span>
                   </div>
                   <p className="font-medium truncate">{trip.startAddress}</p>
@@ -231,6 +294,17 @@ export default function TripsPage() {
               </div>
             </div>
           ))}
+        </div>
+      )}
+      {!loading && total > pageSize && (
+        <div className="flex items-center justify-between mt-5">
+          <p className="text-sm" style={{ color: "var(--md-on-surface-variant)" }}>
+            Page {page} of {Math.ceil(total / pageSize)}
+          </p>
+          <div className="flex gap-2">
+            <button type="button" className="md-outlined-button" disabled={page === 1} onClick={() => goToPage(Math.max(page - 1, 1))}>Previous</button>
+            <button type="button" className="md-outlined-button" disabled={page >= Math.ceil(total / pageSize)} onClick={() => goToPage(page + 1)}>Next</button>
+          </div>
         </div>
       )}
 

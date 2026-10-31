@@ -6,6 +6,7 @@ import { format } from "date-fns";
 import { useToast } from "@/components/Toast";
 import ConfirmDialog from "@/components/ConfirmDialog";
 import { SkeletonRow } from "@/components/Skeleton";
+import { localDateInputToIso, localDateInputValue } from "@/lib/date-input";
 
 interface GasEntry {
   id: string;
@@ -20,6 +21,16 @@ interface GasEntry {
   vehicleName: string | null;
   trip: { startAddress: string; endAddress: string } | null;
 }
+interface GasDraft {
+  id: string;
+  date: string;
+  gallons: string;
+  pricePerGallon: string;
+  paidBy: "SELF" | "PARENTS";
+  fuelType: string;
+  stationName: string;
+  odometer: string;
+}
 
 const FUEL_LABELS: Record<string, string> = {
   REGULAR: "Regular", MIDGRADE: "Midgrade", PREMIUM: "Premium", DIESEL: "Diesel",
@@ -31,6 +42,7 @@ export default function GasPage() {
   const [sort, setSort] = useState("date");
   const [loading, setLoading] = useState(true);
   const [deleteId, setDeleteId] = useState<string | null>(null);
+  const [editDraft, setEditDraft] = useState<GasDraft | null>(null);
   const { toast } = useToast();
 
   const fetchEntries = useCallback(() => {
@@ -47,14 +59,63 @@ export default function GasPage() {
 
   async function deleteEntry() {
     if (!deleteId) return;
-    await fetch("/api/gas", {
-      method: "DELETE",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id: deleteId }),
+    try {
+      const response = await fetch("/api/gas", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: deleteId }),
+      });
+      if (!response.ok) throw new Error("Could not delete gas entry");
+      setEntries((prev) => prev.filter((e) => e.id !== deleteId));
+      setDeleteId(null);
+      toast("Gas entry deleted", "info");
+    } catch {
+      toast("Failed to delete gas entry", "error");
+    }
+  }
+
+  function startEditing(entry: GasEntry) {
+    setEditDraft({
+      id: entry.id,
+      date: localDateInputValue(new Date(entry.date)),
+      gallons: String(entry.gallons),
+      pricePerGallon: String(entry.pricePerGallon),
+      paidBy: entry.paidBy,
+      fuelType: entry.fuelType,
+      stationName: entry.stationName ?? "",
+      odometer: entry.odometer == null ? "" : String(entry.odometer),
     });
-    setEntries((prev) => prev.filter((e) => e.id !== deleteId));
-    setDeleteId(null);
-    toast("Gas entry deleted", "info");
+  }
+
+  async function saveEntry() {
+    if (!editDraft) return;
+    const gallons = Number(editDraft.gallons);
+    const pricePerGallon = Number(editDraft.pricePerGallon);
+    if (!Number.isFinite(gallons) || gallons <= 0 || !Number.isFinite(pricePerGallon) || pricePerGallon <= 0) {
+      toast("Enter valid gallons and price", "error");
+      return;
+    }
+    try {
+      const response = await fetch("/api/gas", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...editDraft,
+          date: localDateInputToIso(editDraft.date),
+          gallons,
+          pricePerGallon,
+          odometer: editDraft.odometer ? Number(editDraft.odometer) : null,
+          stationName: editDraft.stationName || null,
+        }),
+      });
+      if (!response.ok) throw new Error("Could not save gas entry");
+      const updated: GasEntry = await response.json();
+      setEntries((prev) => prev.map((entry) => entry.id === updated.id ? { ...entry, ...updated } : entry));
+      setEditDraft(null);
+      toast("Gas entry updated");
+    } catch {
+      toast("Failed to update gas entry", "error");
+    }
   }
 
   const totalFiltered = entries.reduce((s, e) => s + e.totalCost, 0);
@@ -127,6 +188,18 @@ export default function GasPage() {
             >
               <div className="flex items-start justify-between gap-3">
                 <div className="flex-1 min-w-0">
+                  {editDraft?.id === entry.id ? (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <label className="text-xs">Date<input className="md-text-field mt-1 w-full" type="date" value={editDraft.date} onChange={(e) => setEditDraft({ ...editDraft, date: e.target.value })} /></label>
+                      <label className="text-xs">Paid by<select className="md-text-field mt-1 w-full" value={editDraft.paidBy} onChange={(e) => setEditDraft({ ...editDraft, paidBy: e.target.value as GasDraft["paidBy"] })}><option value="SELF">Me</option><option value="PARENTS">Parents</option></select></label>
+                      <label className="text-xs">Gallons<input className="md-text-field mt-1 w-full" type="number" min="0.01" step="0.01" value={editDraft.gallons} onChange={(e) => setEditDraft({ ...editDraft, gallons: e.target.value })} /></label>
+                      <label className="text-xs">Price per gallon<input className="md-text-field mt-1 w-full" type="number" min="0.01" step="0.001" value={editDraft.pricePerGallon} onChange={(e) => setEditDraft({ ...editDraft, pricePerGallon: e.target.value })} /></label>
+                      <label className="text-xs">Fuel type<select className="md-text-field mt-1 w-full" value={editDraft.fuelType} onChange={(e) => setEditDraft({ ...editDraft, fuelType: e.target.value })}>{Object.entries(FUEL_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+                      <label className="text-xs">Station<input className="md-text-field mt-1 w-full" value={editDraft.stationName} onChange={(e) => setEditDraft({ ...editDraft, stationName: e.target.value })} /></label>
+                      <label className="text-xs">Odometer<input className="md-text-field mt-1 w-full" type="number" min="0" step="1" value={editDraft.odometer} onChange={(e) => setEditDraft({ ...editDraft, odometer: e.target.value })} /></label>
+                    </div>
+                  ) : (
+                  <>
                   <div className="flex items-center gap-2 mb-1.5 flex-wrap">
                     <span
                       className="md-badge"
@@ -169,17 +242,27 @@ export default function GasPage() {
                       Odometer: {entry.odometer.toLocaleString()} mi
                     </p>
                   )}
+                  </>
+                  )}
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
-                  <span className="text-lg font-semibold">${entry.totalCost.toFixed(2)}</span>
-                  <button
+                  <span className="text-lg font-semibold">${(editDraft?.id === entry.id ? (Number(editDraft.gallons) || 0) * (Number(editDraft.pricePerGallon) || 0) : entry.totalCost).toFixed(2)}</span>
+                  {editDraft?.id === entry.id ? (
+                    <>
+                      <button type="button" className="md-icon-button" onClick={saveEntry} title="Save changes">✓</button>
+                      <button type="button" className="md-icon-button" onClick={() => setEditDraft(null)} title="Cancel editing">×</button>
+                    </>
+                  ) : (
+                    <button type="button" className="md-icon-button" onClick={() => startEditing(entry)} title="Edit gas entry">✎</button>
+                  )}
+                  {editDraft?.id !== entry.id && <button
                     onClick={() => setDeleteId(entry.id)}
                     className="md-icon-button"
                     style={{ color: "var(--md-error)" }}
                     title="Delete"
                   >
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>
-                  </button>
+                  </button>}
                 </div>
               </div>
             </div>

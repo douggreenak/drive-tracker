@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useToast } from "@/components/Toast";
 import AnimatedCounter from "@/components/AnimatedCounter";
+import { localDateInputToIso, localDateInputValue } from "@/lib/date-input";
 
 interface Trip {
   id: string;
@@ -22,7 +23,7 @@ const FUEL_TYPES = [
 export default function NewGasEntryPage() {
   const router = useRouter();
   const { toast } = useToast();
-  const [date, setDate] = useState(new Date().toISOString().split("T")[0]);
+  const [date, setDate] = useState(localDateInputValue);
   const [gallons, setGallons] = useState("");
   const [pricePerGallon, setPricePerGallon] = useState("");
   const [paidBy, setPaidBy] = useState<"SELF" | "PARENTS">("SELF");
@@ -59,7 +60,7 @@ export default function NewGasEntryPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          date,
+          date: localDateInputToIso(date),
           gallons: parseFloat(gallons),
           pricePerGallon: parseFloat(pricePerGallon),
           paidBy, fuelType,
@@ -72,6 +73,8 @@ export default function NewGasEntryPage() {
       if (res.ok) {
         toast("Gas entry saved");
         router.push("/gas");
+      } else {
+        toast("Failed to save gas entry", "error");
       }
     } catch {
       toast("Failed to save", "error");

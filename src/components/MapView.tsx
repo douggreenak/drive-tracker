@@ -65,10 +65,17 @@ export default function MapView({
 }: MapViewProps) {
   const mapRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<L.Map | null>(null);
+  const routesLayerRef = useRef<L.LayerGroup | null>(null);
+  const onRouteSelectRef = useRef(onRouteSelect);
   const markersRef = useRef<L.Marker[]>([]);
   const lineRef = useRef<L.Polyline | null>(null);
   const [startPoint, setStartPoint] = useState<L.LatLng | null>(null);
   const [endPoint, setEndPoint] = useState<L.LatLng | null>(null);
+  const [mapReady, setMapReady] = useState(false);
+
+  useEffect(() => {
+    onRouteSelectRef.current = onRouteSelect;
+  }, [onRouteSelect]);
 
   useEffect(() => {
     if (!mapRef.current || mapInstanceRef.current) return;
@@ -79,69 +86,13 @@ export default function MapView({
     }).addTo(map);
 
     mapInstanceRef.current = map;
+    routesLayerRef.current = L.layerGroup().addTo(map);
+    setMapReady(true);
 
-    if (routes && routes.length > 0) {
-      const bounds = L.latLngBounds([]);
-      routes.forEach((route) => {
-        const startIcon = L.divIcon({
-          className: "custom-marker",
-          html: `<div style="width:12px;height:12px;border-radius:50%;background:var(--md-primary, #1a6b52);border:2px solid white;box-shadow:0 2px 4px rgba(0,0,0,0.3)"></div>`,
-          iconSize: [12, 12],
-          iconAnchor: [6, 6],
-        });
-        const endIcon = L.divIcon({
-          className: "custom-marker",
-          html: `<div style="width:12px;height:12px;border-radius:50%;background:var(--md-tertiary, #3f6374);border:2px solid white;box-shadow:0 2px 4px rgba(0,0,0,0.3)"></div>`,
-          iconSize: [12, 12],
-          iconAnchor: [6, 6],
-        });
-
-        L.marker([route.startLat, route.startLng], { icon: startIcon })
-          .addTo(map)
-          .bindPopup(`<b>Start:</b> ${route.startAddress}`);
-        L.marker([route.endLat, route.endLng], { icon: endIcon })
-          .addTo(map)
-          .bindPopup(`<b>End:</b> ${route.endAddress}`);
-
-        // Numbered pins for any intermediate stops.
-        (route.stops ?? []).forEach((stop, i) => {
-          const stopIcon = L.divIcon({
-            className: "custom-marker",
-            html: `<div style="width:18px;height:18px;border-radius:50%;background:#e8a33d;border:2px solid white;color:white;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 4px rgba(0,0,0,0.3)">${i + 1}</div>`,
-            iconSize: [18, 18],
-            iconAnchor: [9, 9],
-          });
-          L.marker([stop.lat, stop.lng], { icon: stopIcon })
-            .addTo(map)
-            .bindPopup(`<b>Stop ${i + 1}:</b> ${stop.address ?? ""}`);
-          bounds.extend([stop.lat, stop.lng]);
-        });
-
-        // Draw the actual recorded route when we have it; otherwise fall back to a straight line.
-        const decoded = route.routeEncoded ? decodePolyline(route.routeEncoded) : null;
-        if (decoded && decoded.length >= 2) {
-          L.polyline(decoded, { color: "var(--md-primary, #1a6b52)", weight: 4, opacity: 0.85 }).addTo(map);
-          decoded.forEach((p) => bounds.extend(p));
-        } else {
-          L.polyline(
-            [
-              [route.startLat, route.startLng],
-              [route.endLat, route.endLng],
-            ],
-            { color: "var(--md-primary, #1a6b52)", weight: 3, opacity: 0.7, dashArray: "6 8" }
-          ).addTo(map);
-        }
-
-        bounds.extend([route.startLat, route.startLng]);
-        bounds.extend([route.endLat, route.endLng]);
-      });
-      if (bounds.isValid()) {
-        map.fitBounds(bounds, { padding: [50, 50] });
-      }
-    }
-
-    if (interactive && onRouteSelect) {
+    if (interactive) {
       map.on("click", (e: L.LeafletMouseEvent) => {
+        const selectRoute = onRouteSelectRef.current;
+        if (!selectRoute) return;
         const { lat, lng } = e.latlng;
 
         if (markersRef.current.length >= 2) {
@@ -169,25 +120,14 @@ export default function MapView({
           setEndPoint(e.latlng);
           const start = markersRef.current[0].getLatLng();
           const end = e.latlng;
+          lineRef.current = L.polyline([[start.lat, start.lng], [end.lat, end.lng]], {
+            color: "var(--md-primary, #1a6b52)",
+            weight: 4,
+            dashArray: "8, 8",
+          }).addTo(map);
 
-          const line = L.polyline(
-            [
-              [start.lat, start.lng],
-              [end.lat, end.lng],
-            ],
-            {
-              color: "var(--md-primary, #1a6b52)",
-              weight: 4,
-              dashArray: "8, 8",
-            }
-          ).addTo(map);
-          lineRef.current = line;
-
-          const distKm = start.distanceTo(end) / 1000;
-          const distMiles = distKm * 0.621371;
-          const durationMin = Math.round((distMiles / 35) * 60);
-
-          onRouteSelect({
+          const distMiles = (start.distanceTo(end) / 1000) * 0.621371;
+          selectRoute({
             startLat: start.lat,
             startLng: start.lng,
             endLat: end.lat,
@@ -195,7 +135,7 @@ export default function MapView({
             startAddress: `${start.lat.toFixed(4)}, ${start.lng.toFixed(4)}`,
             endAddress: `${end.lat.toFixed(4)}, ${end.lng.toFixed(4)}`,
             distance: Math.round(distMiles * 10) / 10,
-            duration: durationMin,
+            duration: Math.round((distMiles / 35) * 60),
           });
         }
       });
@@ -204,8 +144,80 @@ export default function MapView({
     return () => {
       map.remove();
       mapInstanceRef.current = null;
+      routesLayerRef.current = null;
     };
-  }, []);
+  }, [interactive]);
+
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    const layer = routesLayerRef.current;
+    if (!mapReady || !map || !layer) return;
+    layer.clearLayers();
+
+    if (routes && routes.length > 0) {
+      const bounds = L.latLngBounds([]);
+      routes.forEach((route) => {
+        const startIcon = L.divIcon({
+          className: "custom-marker",
+          html: `<div style="width:12px;height:12px;border-radius:50%;background:var(--md-primary, #1a6b52);border:2px solid white;box-shadow:0 2px 4px rgba(0,0,0,0.3)"></div>`,
+          iconSize: [12, 12],
+          iconAnchor: [6, 6],
+        });
+        const endIcon = L.divIcon({
+          className: "custom-marker",
+          html: `<div style="width:12px;height:12px;border-radius:50%;background:var(--md-tertiary, #3f6374);border:2px solid white;box-shadow:0 2px 4px rgba(0,0,0,0.3)"></div>`,
+          iconSize: [12, 12],
+          iconAnchor: [6, 6],
+        });
+
+        L.marker([route.startLat, route.startLng], { icon: startIcon })
+          .addTo(layer)
+          .bindPopup(popupContent("Start", route.startAddress));
+        L.marker([route.endLat, route.endLng], { icon: endIcon })
+          .addTo(layer)
+          .bindPopup(popupContent("End", route.endAddress));
+
+        // Numbered pins for any intermediate stops.
+        (route.stops ?? []).forEach((stop, i) => {
+          const stopIcon = L.divIcon({
+            className: "custom-marker",
+            html: `<div style="width:18px;height:18px;border-radius:50%;background:#e8a33d;border:2px solid white;color:white;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 4px rgba(0,0,0,0.3)">${i + 1}</div>`,
+            iconSize: [18, 18],
+            iconAnchor: [9, 9],
+          });
+          L.marker([stop.lat, stop.lng], { icon: stopIcon })
+            .addTo(layer)
+            .bindPopup(popupContent(`Stop ${i + 1}`, stop.address ?? ""));
+          bounds.extend([stop.lat, stop.lng]);
+        });
+
+        // Draw the actual recorded route when we have it; otherwise fall back to a straight line.
+        const decoded = route.routeEncoded ? decodePolyline(route.routeEncoded) : null;
+        if (decoded && decoded.length >= 2) {
+          L.polyline(decoded, { color: "var(--md-primary, #1a6b52)", weight: 4, opacity: 0.85 }).addTo(layer);
+          decoded.forEach((p) => bounds.extend(p));
+        } else {
+          L.polyline(
+            [
+              [route.startLat, route.startLng],
+              [route.endLat, route.endLng],
+            ],
+            { color: "var(--md-primary, #1a6b52)", weight: 3, opacity: 0.7, dashArray: "6 8" }
+          ).addTo(layer);
+        }
+
+        bounds.extend([route.startLat, route.startLng]);
+        bounds.extend([route.endLat, route.endLng]);
+      });
+      if (bounds.isValid()) {
+        map.fitBounds(bounds, { padding: [50, 50] });
+      } else {
+        map.setView(DEFAULT_CENTER, DEFAULT_ZOOM);
+      }
+    } else {
+      map.setView(DEFAULT_CENTER, DEFAULT_ZOOM);
+    }
+  }, [mapReady, routes]);
 
   return (
     <div className="relative w-full h-full min-h-[400px]">
@@ -228,4 +240,12 @@ export default function MapView({
       )}
     </div>
   );
+}
+
+function popupContent(label: string, value: string): HTMLElement {
+  const content = document.createElement("div");
+  const title = document.createElement("strong");
+  title.textContent = `${label}: `;
+  content.append(title, document.createTextNode(value));
+  return content;
 }

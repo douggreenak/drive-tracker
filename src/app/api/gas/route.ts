@@ -53,6 +53,47 @@ export async function POST(request: NextRequest) {
   return Response.json(entry, { status: 201 });
 }
 
+export async function PATCH(request: NextRequest) {
+  const body = await request.json();
+  if (typeof body.id !== "string" || !body.id) {
+    return Response.json({ error: "Missing id" }, { status: 400 });
+  }
+  const existing = await prisma.gasEntry.findUnique({ where: { id: body.id } });
+  if (!existing) return Response.json({ error: "Gas entry not found" }, { status: 404 });
+
+  const gallons = body.gallons === undefined ? existing.gallons : Number(body.gallons);
+  const pricePerGallon = body.pricePerGallon === undefined ? existing.pricePerGallon : Number(body.pricePerGallon);
+  if (!Number.isFinite(gallons) || gallons <= 0 || !Number.isFinite(pricePerGallon) || pricePerGallon <= 0) {
+    return Response.json({ error: "Gallons and price must be greater than zero" }, { status: 400 });
+  }
+  if (body.date !== undefined && (typeof body.date !== "string" || !Number.isFinite(Date.parse(body.date)))) {
+    return Response.json({ error: "Invalid date" }, { status: 400 });
+  }
+  if (body.paidBy !== undefined && body.paidBy !== "SELF" && body.paidBy !== "PARENTS") {
+    return Response.json({ error: "Invalid payer" }, { status: 400 });
+  }
+  const fuelTypes = ["REGULAR", "MIDGRADE", "PREMIUM", "DIESEL"];
+  if (body.fuelType !== undefined && !fuelTypes.includes(body.fuelType)) {
+    return Response.json({ error: "Invalid fuel type" }, { status: 400 });
+  }
+
+  const data = {
+    ...(body.date !== undefined ? { date: new Date(body.date) } : {}),
+    ...(body.gallons !== undefined ? { gallons } : {}),
+    ...(body.pricePerGallon !== undefined ? { pricePerGallon } : {}),
+    ...(body.paidBy !== undefined ? { paidBy: body.paidBy } : {}),
+    ...(body.fuelType !== undefined ? { fuelType: body.fuelType } : {}),
+    ...(body.stationName !== undefined ? { stationName: body.stationName ? String(body.stationName) : null } : {}),
+    ...(body.odometer !== undefined ? { odometer: body.odometer === null || body.odometer === "" ? null : Number(body.odometer) } : {}),
+    totalCost: gallons * pricePerGallon,
+  };
+  if (data.odometer !== undefined && data.odometer !== null && (!Number.isFinite(data.odometer) || data.odometer < 0)) {
+    return Response.json({ error: "Invalid odometer" }, { status: 400 });
+  }
+  const entry = await prisma.gasEntry.update({ where: { id: body.id }, data });
+  return Response.json(entry);
+}
+
 export async function DELETE(request: NextRequest) {
   const { id } = await request.json();
   await prisma.gasEntry.delete({ where: { id } });

@@ -10,6 +10,10 @@ export async function GET(request: NextRequest) {
   const favoritesOnly = searchParams.get("favorites") === "true";
   const from = searchParams.get("from");
   const to = searchParams.get("to");
+  const requestedPage = searchParams.get("page");
+  const pageSize = Math.min(Math.max(Number(searchParams.get("pageSize")) || 25, 1), 100);
+  const page = Math.max(Number(requestedPage) || 1, 1);
+  const includeRoute = searchParams.get("includeRoute") === "true";
   // Full fidelity — every field a full cloud restore needs, still without track points (those are
   // fetched per-trip from `/api/trips/[id]/points`, see that route's doc comment).
   const full = searchParams.get("full") === "true";
@@ -31,20 +35,23 @@ export async function GET(request: NextRequest) {
     if (to) (where.date as Record<string, unknown>).lte = new Date(to);
   }
 
-  const orderBy: Record<string, string> = {};
-  if (sort === "distance") orderBy.distance = order;
-  else if (sort === "duration") orderBy.duration = order;
-  else orderBy.date = order;
+  const orderBy: Record<string, string>[] = [];
+  if (sort === "distance") orderBy.push({ distance: order });
+  else if (sort === "duration") orderBy.push({ duration: order });
+  else orderBy.push({ date: order });
+  orderBy.push({ id: "desc" });
 
   // Select only the columns the web pages render — notably excluding the large
   // `routeEncoded`/`matchedPolyline` columns and the createdAt/updatedAt timestamps — unless a
   // full restore asked for everything.
-  const trips = await prisma.trip.findMany({
-    where,
-    orderBy,
-    select: full
-      ? undefined
-      : {
+  const [trips, total] = await Promise.all([
+    prisma.trip.findMany({
+      where,
+      orderBy,
+      ...(requestedPage !== null ? { skip: (page - 1) * pageSize, take: pageSize } : {}),
+      select: full
+        ? undefined
+        : {
           id: true,
           date: true,
           startAddress: true,
@@ -60,10 +67,13 @@ export async function GET(request: NextRequest) {
           isFavorite: true,
           paidBy: true,
           stops: true,
+          ...(includeRoute ? { routeEncoded: true } : {}),
           gasEntries: { select: { totalCost: true, paidBy: true } },
         },
-  });
-  return Response.json(trips);
+    }),
+    requestedPage !== null ? prisma.trip.count({ where }) : Promise.resolve(0),
+  ]);
+  return Response.json(requestedPage !== null ? { items: trips, total, page, pageSize } : trips);
 }
 
 export async function POST(request: NextRequest) {

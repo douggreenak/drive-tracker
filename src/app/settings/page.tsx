@@ -27,6 +27,7 @@ export default function SettingsPage() {
   const [budget, setBudget] = useState("");
   const [unit, setUnit] = useState("miles");
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState("");
 
   const [vehicleName, setVehicleName] = useState("");
   const [vehicleMake, setVehicleMake] = useState("");
@@ -49,8 +50,9 @@ export default function SettingsPage() {
 
   async function saveSettings() {
     setSaving(true);
+    setSaveError("");
     try {
-      await fetch("/api/settings", {
+      const response = await fetch("/api/settings", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -58,11 +60,32 @@ export default function SettingsPage() {
           distanceUnit: unit,
         }),
       });
+      if (!response.ok) throw new Error("Could not save settings");
       toast("Settings saved");
     } catch {
+      setSaveError("Settings couldn’t be saved. Check your connection and try again.");
       toast("Failed to save", "error");
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function saveDistanceUnit(nextUnit: string) {
+    const previous = unit;
+    setUnit(nextUnit);
+    setSaveError("");
+    try {
+      const response = await fetch("/api/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ distanceUnit: nextUnit }),
+      });
+      if (!response.ok) throw new Error("Could not save distance unit");
+      toast("Distance unit saved");
+    } catch {
+      setUnit(previous);
+      setSaveError("Distance unit couldn’t be saved.");
+      toast("Failed to save distance unit", "error");
     }
   }
 
@@ -132,6 +155,7 @@ export default function SettingsPage() {
         <p className="text-xs mt-2" style={{ color: "var(--md-on-surface-variant)" }}>
           Set to 0 to disable budget tracking
         </p>
+        {saveError && <p role="alert" className="text-xs mt-2" style={{ color: "var(--md-error)" }}>{saveError}</p>}
       </div>
 
       {/* Units Section */}
@@ -141,7 +165,7 @@ export default function SettingsPage() {
           {["miles", "km"].map((u) => (
             <button
               key={u}
-              onClick={() => { setUnit(u); }}
+              onClick={() => { if (unit !== u) void saveDistanceUnit(u); }}
               className={`md-chip flex-1 justify-center ${unit === u ? "active" : ""}`}
             >
               {u === "miles" ? "Miles" : "Kilometers"}

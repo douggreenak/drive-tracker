@@ -21,7 +21,34 @@ interface Stats {
   categoryCounts: Record<string, number>;
   monthlyBudget: number;
   favoriteCount: number;
+  distanceUnit: "miles" | "km";
+  periodStats: {
+    period: "30d" | "90d" | "12m";
+    trips: number;
+    miles: number;
+    spent: number;
+    previousTrips: number;
+    previousMiles: number;
+    previousSpent: number;
+  };
 }
+
+type ComparisonPeriod = "30d" | "90d" | "12m";
+interface ComparisonMetric {
+  label: string;
+  current: number;
+  previous: number;
+  suffix: string;
+  decimals: number;
+  prefix?: string;
+  convert?: boolean;
+}
+
+const COMPARISON_PERIODS: { value: ComparisonPeriod; label: string }[] = [
+  { value: "30d", label: "30 days" },
+  { value: "90d", label: "90 days" },
+  { value: "12m", label: "12 months" },
+];
 
 function getGreeting(): string {
   const hour = new Date().getHours();
@@ -42,23 +69,26 @@ const CATEGORY_LABELS: Record<string, string> = {
 
 export default function Dashboard() {
   const [stats, setStats] = useState<Stats | null>(null);
+  const [period, setPeriod] = useState<"30d" | "90d" | "12m">("30d");
+  const [loadError, setLoadError] = useState("");
+  const [retryKey, setRetryKey] = useState(0);
 
   useEffect(() => {
-    fetch("/api/stats")
-      .then((r) => r.json())
+    const controller = new AbortController();
+    fetch(`/api/stats?period=${period}`, { signal: controller.signal })
+      .then(async (response) => {
+        if (!response.ok) throw new Error("Could not load dashboard statistics");
+        return response.json();
+      })
       .then(setStats)
-      .catch(() =>
-        setStats({
-          totalTrips: 0, totalMiles: 0, totalGallons: 0, totalSpent: 0,
-          selfPaid: 0, parentsPaid: 0, avgMpg: 0, costPerMile: 0,
-          avgPricePerGallon: 0, monthlySpent: 0, weeklyMiles: 0,
-          weeklyTrips: 0, categoryCounts: {}, monthlyBudget: 0,
-          favoriteCount: 0,
-        })
-      );
-  }, []);
+      .catch((error: unknown) => {
+        if (error instanceof DOMException && error.name === "AbortError") return;
+        setLoadError("Dashboard stats couldn’t be loaded. Check your connection and try again.");
+      });
+    return () => controller.abort();
+  }, [period, retryKey]);
 
-  if (!stats) {
+  if (!stats && !loadError) {
     return (
       <div className="p-6 max-w-5xl mx-auto">
         <div className="mb-8">
@@ -66,6 +96,17 @@ export default function Dashboard() {
           <div className="skeleton h-4 w-64 rounded" />
         </div>
         <SkeletonDashboard />
+      </div>
+    );
+  }
+
+  if (!stats) {
+    return (
+      <div className="p-6 max-w-5xl mx-auto">
+        <div className="md-card" role="alert">
+          <p className="font-medium">{loadError}</p>
+          <button className="md-outlined-button mt-4" onClick={() => { setLoadError(""); setRetryKey((key) => key + 1); }}>Retry</button>
+        </div>
       </div>
     );
   }
@@ -84,6 +125,46 @@ export default function Dashboard() {
         </p>
       </div>
 
+      <section className="md-card mb-6 animate-fade-in-up" aria-label="Period comparison">
+        <div className="flex items-center justify-between gap-3 flex-wrap mb-4">
+          <div>
+            <h2 className="font-semibold">Period comparison</h2>
+            <p className="text-xs mt-1" style={{ color: "var(--md-on-surface-variant)" }}>
+              Compared with the previous matching period
+            </p>
+          </div>
+          <div className="flex gap-2" role="group" aria-label="Choose comparison period">
+            {COMPARISON_PERIODS.map(({ value, label }) => (
+              <button key={value} type="button" className={`md-chip ${period === value ? "active" : ""}`}
+                aria-pressed={period === value} onClick={() => { setLoadError(""); setPeriod(value); }}>
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          {([
+            { label: "Trips", current: stats.periodStats.trips, previous: stats.periodStats.previousTrips, suffix: "", decimals: 0 },
+            { label: "Distance", current: stats.periodStats.miles, previous: stats.periodStats.previousMiles,
+              suffix: stats.distanceUnit === "km" ? " km" : " mi", convert: true, decimals: 1 },
+            { label: "Fuel spending", current: stats.periodStats.spent, previous: stats.periodStats.previousSpent, prefix: "$", suffix: "", decimals: 2 },
+          ] satisfies ComparisonMetric[]).map((item) => {
+            const factor = item.convert && stats.distanceUnit === "km" ? 1.60934 : 1;
+            const current = item.current * factor;
+            const previous = item.previous * factor;
+            return (
+              <div key={item.label} className="rounded-xl p-3" style={{ background: "var(--md-surface-container)" }}>
+                <p className="text-xs" style={{ color: "var(--md-on-surface-variant)" }}>{item.label}</p>
+                <p className="text-xl font-semibold mt-1">{item.prefix ?? ""}{current.toFixed(item.decimals)}{item.suffix}</p>
+                <p className="text-xs mt-1" style={{ color: "var(--md-on-surface-variant)" }}>
+                  Previous: {item.prefix ?? ""}{previous.toFixed(item.decimals)}{item.suffix}
+                </p>
+              </div>
+            );
+          })}
+        </div>
+      </section>
+
       {/* Primary Stats */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
         <StatCard
@@ -95,10 +176,10 @@ export default function Dashboard() {
         />
         <StatCard
           icon={<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>}
-          label="Miles Driven"
-          value={stats.totalMiles}
+          label={stats.distanceUnit === "km" ? "Kilometers Driven" : "Miles Driven"}
+          value={stats.totalMiles * (stats.distanceUnit === "km" ? 1.60934 : 1)}
           decimals={1}
-          sublabel={`${stats.weeklyMiles} this week`}
+          sublabel={`${(stats.weeklyMiles * (stats.distanceUnit === "km" ? 1.60934 : 1)).toFixed(1)} ${stats.distanceUnit === "km" ? "km" : "mi"} this week`}
           color="var(--md-tertiary-container)"
           delay={60}
         />
@@ -117,7 +198,7 @@ export default function Dashboard() {
           value={stats.totalSpent}
           prefix="$"
           decimals={2}
-          sublabel={`$${stats.costPerMile}/mi`}
+          sublabel={`$${(stats.costPerMile / (stats.distanceUnit === "km" ? 1.60934 : 1)).toFixed(2)}/${stats.distanceUnit === "km" ? "km" : "mi"}`}
           color="var(--md-secondary-container)"
           delay={120}
         />

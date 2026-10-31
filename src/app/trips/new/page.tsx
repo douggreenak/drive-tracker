@@ -4,6 +4,8 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import dynamic from "next/dynamic";
 import { useToast } from "@/components/Toast";
+import { localDateInputToIso, localDateInputValue } from "@/lib/date-input";
+import { formatDistance, useDistanceUnit } from "@/lib/useDistanceUnit";
 
 const MapView = dynamic(() => import("@/components/MapView"), { ssr: false });
 
@@ -31,10 +33,11 @@ const CATEGORIES = [
 export default function NewTripPage() {
   const router = useRouter();
   const { toast } = useToast();
+  const distanceUnit = useDistanceUnit();
   const [route, setRoute] = useState<RouteData | null>(null);
   const [startAddress, setStartAddress] = useState("");
   const [endAddress, setEndAddress] = useState("");
-  const [date, setDate] = useState(new Date().toISOString().split("T")[0]);
+  const [date, setDate] = useState(localDateInputValue);
   const [notes, setNotes] = useState("");
   const [category, setCategory] = useState("OTHER");
   const [paidBy, setPaidBy] = useState("SELF");
@@ -56,7 +59,7 @@ export default function NewTripPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          date, category,
+          date: localDateInputToIso(date), category,
           startAddress: startAddress || route.startAddress,
           endAddress: endAddress || route.endAddress,
           startLat: route.startLat, startLng: route.startLng,
@@ -69,6 +72,8 @@ export default function NewTripPage() {
       if (res.ok) {
         toast("Trip saved successfully");
         router.push("/trips");
+      } else {
+        toast("Failed to save trip", "error");
       }
     } catch {
       toast("Failed to save trip", "error");
@@ -108,7 +113,7 @@ export default function NewTripPage() {
                 Route Selected
               </p>
               <p className="text-lg font-semibold" style={{ color: "var(--md-on-primary-container)" }}>
-                {route.distance} miles · ~{route.duration} min
+                {formatDistance(route.distance, distanceUnit)} · ~{route.duration} min
               </p>
             </div>
           )}
