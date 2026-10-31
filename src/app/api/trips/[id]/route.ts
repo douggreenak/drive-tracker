@@ -46,5 +46,20 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
     },
   });
   if (!trip) return Response.json({ error: "Trip not found" }, { status: 404 });
-  return Response.json(trip);
+  const journeyLegs = trip.journeyId
+    ? await prisma.trip.findMany({
+      where: { journeyId: trip.journeyId },
+      orderBy: { legIndex: "asc" },
+      select: {
+        id: true,
+        legIndex: true,
+        legTotal: true,
+        startAddress: true,
+        endAddress: true,
+        distance: true,
+        duration: true,
+      },
+    })
+    : [];
+  return Response.json({ ...trip, journeyLegs });
 }

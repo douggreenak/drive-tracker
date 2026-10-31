@@ -30,6 +30,10 @@ interface MapViewProps {
     routeEncoded?: string | null;
     /// Intermediate stops to mark along the route.
     stops?: Array<{ address?: string; lat: number; lng: number }> | null;
+    /// Matched road geometry returned by the iOS trip recorder.
+    matchedPolyline?: string | null;
+    /// Recorded positions which did not match a road.
+    deviationPoints?: [number, number][];
   }>;
   trackPlayback?: {
     points: [number, number][];
@@ -60,6 +64,20 @@ function decodePolyline(encoded: string): [number, number][] {
     points.push([lat / 1e5, lng / 1e5]);
   }
   return points;
+}
+
+function decodeMatchedPolyline(encoded: string): [number, number][] {
+  try {
+    const parsed: unknown = JSON.parse(atob(encoded));
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((point): point is [number, number] =>
+      Array.isArray(point) && point.length >= 2
+      && typeof point[0] === "number" && Number.isFinite(point[0]) && point[0] >= -90 && point[0] <= 90
+      && typeof point[1] === "number" && Number.isFinite(point[1]) && point[1] >= -180 && point[1] <= 180
+    );
+  } catch {
+    return [];
+  }
 }
 
 export default function MapView({
@@ -198,9 +216,13 @@ export default function MapView({
           bounds.extend([stop.lat, stop.lng]);
         });
 
-        // Draw the actual recorded route when we have it; otherwise fall back to a straight line.
-        const decoded = route.routeEncoded ? decodePolyline(route.routeEncoded) : null;
-        if (decoded && decoded.length >= 2) {
+        // Prefer the road-matched path when available; otherwise use the recorded route.
+        const matched = route.matchedPolyline ? decodeMatchedPolyline(route.matchedPolyline) : [];
+        const decoded = !matched.length && route.routeEncoded ? decodePolyline(route.routeEncoded) : null;
+        if (matched.length >= 2) {
+          L.polyline(matched, { color: "#3984b6", weight: 4, opacity: 0.9 }).addTo(layer);
+          matched.forEach((point) => bounds.extend(point));
+        } else if (decoded && decoded.length >= 2) {
           L.polyline(decoded, { color: "var(--md-primary, #1a6b52)", weight: 4, opacity: 0.85 }).addTo(layer);
           decoded.forEach((p) => bounds.extend(p));
         } else {
@@ -212,6 +234,16 @@ export default function MapView({
             { color: "var(--md-primary, #1a6b52)", weight: 3, opacity: 0.7, dashArray: "6 8" }
           ).addTo(layer);
         }
+
+        (route.deviationPoints ?? []).slice(0, 200).forEach((point) => {
+          L.circleMarker(point, {
+            radius: 4,
+            color: "#a84d14",
+            weight: 1,
+            fillColor: "#f3a34b",
+            fillOpacity: 0.9,
+          }).addTo(layer);
+        });
 
         bounds.extend([route.startLat, route.startLng]);
         bounds.extend([route.endLat, route.endLng]);
