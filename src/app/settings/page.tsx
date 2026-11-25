@@ -20,6 +20,40 @@ interface Vehicle {
   tankSize: number | null;
 }
 
+function CopyBlock({ label, value, secret }: { label: string; value: string; secret?: boolean }) {
+  const { toast } = useToast();
+  const [shown, setShown] = useState(!secret);
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(value);
+      toast("Copied");
+    } catch {
+      toast("Copy failed", "error");
+    }
+  }
+  return (
+    <div className="mb-3">
+      <div className="flex items-center justify-between mb-1">
+        <span className="text-xs" style={{ color: "var(--md-on-surface-variant)" }}>{label}</span>
+        <span className="flex gap-2">
+          {secret && (
+            <button type="button" onClick={() => setShown(!shown)} className="md-tonal-button">
+              {shown ? "Hide" : "Show"}
+            </button>
+          )}
+          <button type="button" onClick={copy} className="md-tonal-button">Copy</button>
+        </span>
+      </div>
+      <pre
+        className="text-xs p-3 rounded-xl overflow-x-auto whitespace-pre-wrap break-all select-all"
+        style={{ background: "var(--md-surface-container)" }}
+      >
+        {shown ? value : value.replace(/[^\s]/g, "•").slice(0, 40)}
+      </pre>
+    </div>
+  );
+}
+
 export default function SettingsPage() {
   const { toast } = useToast();
   const [settings, setSettings] = useState<Settings | null>(null);
@@ -35,6 +69,26 @@ export default function SettingsPage() {
   const [vehicleYear, setVehicleYear] = useState("");
   const [vehicleTank, setVehicleTank] = useState("");
   const [showVehicleForm, setShowVehicleForm] = useState(false);
+
+  const [conn, setConn] = useState<{ baseUrl: string; apiKey: string | null; mcpAvailable: boolean } | null>(null);
+  const [mcpToken, setMcpToken] = useState("");
+
+  useEffect(() => {
+    fetch("/api/connection")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => d && setConn(d))
+      .catch(() => {});
+  }, []);
+
+  async function generateMcpToken() {
+    try {
+      const res = await fetch("/api/connection", { method: "POST" });
+      if (!res.ok) throw new Error();
+      setMcpToken((await res.json()).token);
+    } catch {
+      toast("Could not generate token", "error");
+    }
+  }
 
   useEffect(() => {
     fetch("/api/settings")
@@ -237,8 +291,55 @@ export default function SettingsPage() {
         )}
       </div>
 
+      {/* API Connection Section */}
+      {conn && (
+        <div className="md-card mb-4 animate-fade-in-up stagger-4">
+          <h3 className="text-sm font-semibold mb-1">API &amp; MCP Connection</h3>
+          <p className="text-xs mb-3" style={{ color: "var(--md-on-surface-variant)" }}>
+            Keep these private — anyone with them can read and edit your data.
+          </p>
+          <CopyBlock label="Base URL" value={conn.baseUrl} />
+          <CopyBlock label="OpenAPI spec" value={`${conn.baseUrl}/api/openapi`} />
+          {conn.apiKey ? (
+            <>
+              <CopyBlock label="REST API key (x-api-key or Bearer)" value={conn.apiKey} secret />
+              <CopyBlock
+                label="REST example"
+                value={`curl ${conn.baseUrl}/api/trips \\\n  -H "x-api-key: ${conn.apiKey}"`}
+                secret
+              />
+            </>
+          ) : (
+            <p className="text-xs mb-3" style={{ color: "var(--md-error)" }}>
+              API_KEY is not set on the server.
+            </p>
+          )}
+          <CopyBlock label="MCP endpoint" value={`${conn.baseUrl}/mcp`} />
+          {conn.mcpAvailable ? (
+            mcpToken ? (
+              <>
+                <CopyBlock label="MCP token (valid 5 years)" value={mcpToken} secret />
+                <CopyBlock
+                  label="Claude Code command"
+                  value={`claude mcp add --transport http drive-tracker ${conn.baseUrl}/mcp \\\n  --header "Authorization: Bearer ${mcpToken}"`}
+                  secret
+                />
+              </>
+            ) : (
+              <button type="button" onClick={generateMcpToken} className="md-outlined-button w-full">
+                Generate MCP token
+              </button>
+            )
+          ) : (
+            <p className="text-xs" style={{ color: "var(--md-error)" }}>
+              MCP_TOKEN_SECRET is not set on the server.
+            </p>
+          )}
+        </div>
+      )}
+
       {/* Export Section */}
-      <div className="md-card animate-fade-in-up stagger-4">
+      <div className="md-card animate-fade-in-up stagger-5">
         <h3 className="text-sm font-semibold mb-3">Data</h3>
         <a href="/api/export" download className="md-outlined-button w-full">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
