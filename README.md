@@ -37,16 +37,20 @@ Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/bui
 
 ## API & MCP
 
-All `/api/*` routes accept the shared `API_KEY` (Vercel env var) as either
-`x-api-key: <key>` or `Authorization: Bearer <key>`. The browser session cookie also works.
+**REST API** (`/api/*`, described at `GET /api/openapi`): authenticate with the shared `API_KEY` as
+`x-api-key: <key>` or `Authorization: Bearer <key>` (a browser session cookie also works).
 
-- **REST API** — described at `GET /api/openapi` (OpenAPI 3.1).
-- **MCP server** — `POST /api/mcp` (Streamable HTTP, stateless). Tools: `get_stats`, `list_trips`,
-  `get_trip`, `log_trip`, `update_trip`, `list_gas_entries`, `add_gas_entry`, `list_vehicles`,
-  `list_scheduled_drives`, `list_saved_places`, `list_payer_groups`, `get_settings`.
-  There is deliberately no delete tool.
+**MCP server** (`POST /mcp`, Streamable HTTP, stateless) uses a *separate* credential: a signed
+token valid for 5 years, verified with `MCP_TOKEN_SECRET` (set in Vercel). `API_KEY` does not work
+on `/mcp`, and MCP tokens do not work on `/api/*`.
 
 ```bash
-claude mcp add --transport http drive-tracker https://<your-domain>/api/mcp \
-  --header "Authorization: Bearer $API_KEY"
+MCP_TOKEN_SECRET=<secret> npm run mcp:token        # mint a 5-year token (optionally: -- <days>)
+claude mcp add --transport http drive-tracker https://<your-domain>/mcp \
+  --header "Authorization: Bearer <token>"
 ```
+
+Tools: `get_stats`, `list_trips`, `get_trip`, `log_trip`, `update_trip`, `list_gas_entries`,
+`add_gas_entry`, `list_vehicles`, `list_scheduled_drives`, `list_saved_places`,
+`list_payer_groups`, `get_settings`. There is deliberately no delete tool. Rotating
+`MCP_TOKEN_SECRET` revokes all tokens.

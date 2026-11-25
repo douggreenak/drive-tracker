@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
+import { bearerToken, verifyMcpToken } from "@/lib/mcp/auth";
 import { SESSION_COOKIE, verifySessionToken, isValidApiKey, apiKeyFromHeaders } from "@/lib/auth";
 
 // Gate the whole site behind a password. Two ways in:
@@ -21,6 +22,12 @@ export function proxy(request: NextRequest) {
   // Public paths that must stay reachable without a session.
   if (pathname === "/login" || pathname.startsWith("/api/auth/")) {
     return NextResponse.next();
+  }
+
+  // MCP endpoint: its own expiring token only — neither the API key nor a browser session works.
+  if (pathname === "/mcp") {
+    if (verifyMcpToken(bearerToken(request.headers))) return NextResponse.next();
+    return Response.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   const hasSession = verifySessionToken(request.cookies.get(SESSION_COOKIE)?.value);

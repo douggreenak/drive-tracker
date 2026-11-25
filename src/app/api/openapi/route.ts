@@ -35,7 +35,6 @@ const spec = {
     "/api/stats": { get: { tags: ["Stats"], parameters: [{ name: "period", in: "query", schema: { enum: ["30d", "90d", "12m"] } }], responses: ok } },
     "/api/analytics": { get: { tags: ["Stats"], responses: ok } },
     "/api/export": { get: { tags: ["Export"], responses: ok } },
-    "/api/mcp": { post: { tags: ["MCP"], summary: "Model Context Protocol server (Streamable HTTP, JSON-RPC)", responses: ok } },
   },
 };
 
