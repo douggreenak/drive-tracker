@@ -20,6 +20,58 @@ interface Vehicle {
   tankSize: number | null;
 }
 
+async function copyText(text: string) {
+  try {
+    await navigator.clipboard.writeText(text);
+    window.dispatchEvent(new CustomEvent("dt-copied"));
+  } catch {}
+}
+
+const mcpCommand = (base: string, token: string) =>
+  `claude mcp add --transport http drive-tracker ${base}/mcp \\\n  --header "Authorization: Bearer ${token}"`;
+
+function apiDocs(c: { baseUrl: string; apiKey: string | null }) {
+  return `Drive Tracker REST API
+Base URL: ${c.baseUrl}
+API key: ${c.apiKey ?? "(not configured)"}
+Auth: send header "x-api-key: <key>" or "Authorization: Bearer <key>" on every /api/* call.
+OpenAPI spec: ${c.baseUrl}/api/openapi
+Units: distances in miles, durations in seconds.
+
+Endpoints (JSON):
+  /api/trips            GET (search, category, favorites, from, to, sort, order, page, pageSize, full, includeRoute), POST, PATCH, DELETE
+  /api/trips/{id}       GET
+  /api/trips/{id}/points GET
+  /api/gas              GET, POST, PATCH, DELETE
+  /api/vehicles         GET, POST, PATCH, DELETE
+  /api/scheduled        GET, POST, PATCH, DELETE
+  /api/saved-places     GET, POST, PATCH, DELETE
+  /api/payer-groups     GET, POST, PATCH, DELETE
+  /api/settings         GET, PUT
+  /api/stats            GET (period=30d|90d|12m)
+  /api/analytics        GET
+  /api/export           GET (CSV)
+
+Example:
+  curl ${c.baseUrl}/api/trips -H "x-api-key: ${c.apiKey ?? "<key>"}"
+`;
+}
+
+function mcpDocs(base: string, token: string) {
+  return `Drive Tracker MCP server
+Endpoint: ${base}/mcp (Streamable HTTP, stateless)
+Token (valid 5 years): ${token}
+Auth: "Authorization: Bearer <token>". Separate from the REST API key; it does not work on /api/*.
+
+Add to Claude Code:
+  ${mcpCommand(base, token).replace(/\n/g, "\n  ")}
+
+Tools: get_stats, list_trips, get_trip, log_trip, update_trip, list_gas_entries, add_gas_entry,
+list_vehicles, list_scheduled_drives, list_saved_places, list_payer_groups, get_settings.
+There is deliberately no delete tool. Rotating MCP_TOKEN_SECRET revokes all tokens.
+`;
+}
+
 function CopyBlock({ label, value, secret }: { label: string; value: string; secret?: boolean }) {
   const { toast } = useToast();
   const [shown, setShown] = useState(!secret);
@@ -80,15 +132,30 @@ export default function SettingsPage() {
       .catch(() => {});
   }, []);
 
-  async function generateMcpToken() {
+  async function generateMcpToken(): Promise<string> {
     try {
       const res = await fetch("/api/connection", { method: "POST" });
       if (!res.ok) throw new Error();
-      setMcpToken((await res.json()).token);
+      const { token } = await res.json();
+      setMcpToken(token);
+      return token;
     } catch {
       toast("Could not generate token", "error");
+      return "";
     }
   }
+
+  async function copyAllMcp() {
+    if (!conn) return;
+    const token = mcpToken || (await generateMcpToken());
+    if (token) await copyText(mcpDocs(conn.baseUrl, token));
+  }
+
+  useEffect(() => {
+    const onCopied = () => toast("Copied");
+    window.addEventListener("dt-copied", onCopied);
+    return () => window.removeEventListener("dt-copied", onCopied);
+  }, [toast]);
 
   useEffect(() => {
     fetch("/api/settings")
@@ -291,10 +358,15 @@ export default function SettingsPage() {
         )}
       </div>
 
-      {/* API Connection Section */}
+      {/* REST API Section */}
       {conn && (
         <div className="md-card mb-4 animate-fade-in-up stagger-4">
-          <h3 className="text-sm font-semibold mb-1">API &amp; MCP Connection</h3>
+          <div className="flex items-center justify-between mb-1">
+            <h3 className="text-sm font-semibold">REST API</h3>
+            <button type="button" onClick={() => copyText(apiDocs(conn))} className="md-tonal-button">
+              Copy all
+            </button>
+          </div>
           <p className="text-xs mb-3" style={{ color: "var(--md-on-surface-variant)" }}>
             Keep these private — anyone with them can read and edit your data.
           </p>
@@ -302,44 +374,58 @@ export default function SettingsPage() {
           <CopyBlock label="OpenAPI spec" value={`${conn.baseUrl}/api/openapi`} />
           {conn.apiKey ? (
             <>
-              <CopyBlock label="REST API key (x-api-key or Bearer)" value={conn.apiKey} secret />
+              <CopyBlock label="API key (x-api-key or Bearer)" value={conn.apiKey} secret />
               <CopyBlock
-                label="REST example"
+                label="Example"
                 value={`curl ${conn.baseUrl}/api/trips \\\n  -H "x-api-key: ${conn.apiKey}"`}
                 secret
               />
             </>
           ) : (
-            <p className="text-xs mb-3" style={{ color: "var(--md-error)" }}>
+            <p className="text-xs" style={{ color: "var(--md-error)" }}>
               API_KEY is not set on the server.
             </p>
           )}
+        </div>
+      )}
+
+      {/* MCP Section */}
+      {conn && (
+        <div className="md-card mb-4 animate-fade-in-up stagger-5">
+          <div className="flex items-center justify-between mb-1">
+            <h3 className="text-sm font-semibold">MCP Server</h3>
+            {conn.mcpAvailable && (
+              <button type="button" onClick={copyAllMcp} className="md-tonal-button">
+                Copy all
+              </button>
+            )}
+          </div>
+          <p className="text-xs mb-3" style={{ color: "var(--md-on-surface-variant)" }}>
+            Separate credential from the REST API key. The token does not work on /api/*.
+          </p>
           <CopyBlock label="MCP endpoint" value={`${conn.baseUrl}/mcp`} />
           {conn.mcpAvailable ? (
             mcpToken ? (
               <>
                 <CopyBlock label="MCP token (valid 5 years)" value={mcpToken} secret />
-                <CopyBlock
-                  label="Claude Code command"
-                  value={`claude mcp add --transport http drive-tracker ${conn.baseUrl}/mcp \\\n  --header "Authorization: Bearer ${mcpToken}"`}
-                  secret
-                />
+                <CopyBlock label="Claude Code command" value={mcpCommand(conn.baseUrl, mcpToken)} secret />
               </>
             ) : (
-              <button type="button" onClick={generateMcpToken} className="md-outlined-button w-full">
+              <button type="button" onClick={() => void generateMcpToken()} className="md-outlined-button w-full">
                 Generate MCP token
               </button>
             )
           ) : (
             <p className="text-xs" style={{ color: "var(--md-error)" }}>
-              MCP_TOKEN_SECRET is not set on the server.
+              MCP_TOKEN_SECRET is not set on the server. Add it as an environment variable in Vercel
+              (any long random string), redeploy, then reload this page.
             </p>
           )}
         </div>
       )}
 
       {/* Export Section */}
-      <div className="md-card animate-fade-in-up stagger-5">
+      <div className="md-card animate-fade-in-up stagger-6">
         <h3 className="text-sm font-semibold mb-3">Data</h3>
         <a href="/api/export" download className="md-outlined-button w-full">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
