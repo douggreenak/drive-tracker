@@ -62,3 +62,13 @@ export function isValidApiKey(provided: string | null | undefined): boolean {
   if (!expected || !provided) return false;
   return safeEqual(provided, expected);
 }
+
+// Pull the API key out of a request: the iOS app sends `x-api-key`; MCP clients and generic HTTP
+// clients typically send `Authorization: Bearer <key>`. Both carry the same shared secret.
+export function apiKeyFromHeaders(headers: Headers): string | null {
+  const direct = headers.get("x-api-key");
+  if (direct) return direct;
+  const auth = headers.get("authorization");
+  const match = auth?.match(/^Bearer\s+(.+)$/i);
+  return match ? match[1].trim() : null;
+}

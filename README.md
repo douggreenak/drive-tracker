@@ -34,3 +34,19 @@ You can check out [the Next.js GitHub repository](https://github.com/vercel/next
 The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
 
 Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+
+## API & MCP
+
+All `/api/*` routes accept the shared `API_KEY` (Vercel env var) as either
+`x-api-key: <key>` or `Authorization: Bearer <key>`. The browser session cookie also works.
+
+- **REST API** — described at `GET /api/openapi` (OpenAPI 3.1).
+- **MCP server** — `POST /api/mcp` (Streamable HTTP, stateless). Tools: `get_stats`, `list_trips`,
+  `get_trip`, `log_trip`, `update_trip`, `list_gas_entries`, `add_gas_entry`, `list_vehicles`,
+  `list_scheduled_drives`, `list_saved_places`, `list_payer_groups`, `get_settings`.
+  There is deliberately no delete tool.
+
+```bash
+claude mcp add --transport http drive-tracker https://<your-domain>/api/mcp \
+  --header "Authorization: Bearer $API_KEY"
+```
