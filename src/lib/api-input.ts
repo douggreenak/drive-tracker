@@ -189,7 +189,8 @@ const SCHEDULED_KEYS = new Set([
   "title", "startAddress", "endAddress", "startLat", "startLng", "endLat", "endLng", "departure",
   "estimatedTravelTime", "scheduledArrival", "repeatRule", "category", "paidBy", "vehicleName", "notes",
   "stops", "isEnabled", "isCanceled", "lastStartedAt", "lastCompletedAt", "skippedOccurrences",
-  "canceledOccurrences", "id", "date", "departureTime", "time", "start", "end", "timezone",
+  "canceledOccurrences", "id", "date", "departureTime", "time", "start", "end", "timezone", "vehicle", "payer",
+  "repeat", "estimatedMinutes",
 ]);
 export const SCHEDULED_KNOWN_KEYS: ReadonlySet<string> = SCHEDULED_KEYS;
 
@@ -197,7 +198,7 @@ export type ScheduledInput = {
   title: string; startAddress: string; endAddress: string;
   startLat: number; startLng: number; endLat: number; endLng: number;
   departure: Date; estimatedTravelTime: number; scheduledArrival: Date;
-  repeatRule: RepeatRule; category: Category; paidBy: string;
+  repeatRule: RepeatRule; category: Category; paidBy: string | undefined;
   vehicleName: string | null; notes: string | null; stops: Stop[] | undefined;
   isEnabled: boolean; isCanceled: boolean;
   lastStartedAt: Date | null; lastCompletedAt: Date | null;
@@ -347,8 +348,8 @@ export function parseScheduledCreate(raw: unknown, opts: { defaultTimeZone?: str
     departure, estimatedTravelTime: travel,
     scheduledArrival: scheduledArrival ?? new Date(departure.getTime() + travel * 1000),
     repeatRule, category,
-    paidBy: str(o.paidBy) ?? "SELF",
-    vehicleName: str(o.vehicleName) ?? null,
+    paidBy: str(o.paidBy ?? o.payer), // resolved against payer groups / default by the caller
+    vehicleName: str(o.vehicleName ?? o.vehicle) ?? null,
     notes: str(o.notes) ?? null,
     stops,
     isEnabled: bool(o.isEnabled) ?? true,
@@ -411,7 +412,7 @@ export const TRIP_KNOWN_KEYS: ReadonlySet<string> = new Set([
   "distance", "duration", "movingSeconds", "maxSpeed", "avgSpeed", "notes", "name", "routeEncoded",
   "matchedPolyline", "matchedFraction", "usedRouteMatching", "category", "isFavorite", "paidBy",
   "vehicleName", "vehicleMpg", "estimatedGallons", "scheduledDeparture", "scheduledArrival",
-  "journeyId", "legIndex", "legTotal", "isManualEntry", "stops",
+  "journeyId", "legIndex", "legTotal", "isManualEntry", "stops", "vehicle", "payer", "start", "end",
 ]);
 
 type FieldErr = { field: string; message: string };
@@ -484,14 +485,14 @@ export function parseTripCreate(raw: unknown): Record<string, unknown> {
 
   return {
     date, endDate: endDate ?? null,
-    startAddress: str(o.startAddress) ?? "", endAddress: str(o.endAddress) ?? "",
+    startAddress: str(o.startAddress ?? o.start) ?? "", endAddress: str(o.endAddress ?? o.end) ?? "",
     startLat, startLng, endLat, endLng, distance, duration,
     movingSeconds: movingSeconds ?? null, maxSpeed: maxSpeed ?? null, avgSpeed: avgSpeed ?? null,
     notes: str(o.notes) ?? null, name: str(o.name) ?? null,
     routeEncoded: str(o.routeEncoded) ?? null, matchedPolyline: str(o.matchedPolyline) ?? null,
     matchedFraction: matchedFraction ?? null, usedRouteMatching: usedRouteMatching ?? false,
-    category, isFavorite: isFavorite ?? false, paidBy: str(o.paidBy) ?? "SELF",
-    vehicleName: str(o.vehicleName) ?? null, vehicleMpg: vehicleMpg ?? null,
+    category, isFavorite: isFavorite ?? false, paidBy: str(o.paidBy ?? o.payer),
+    vehicleName: str(o.vehicleName ?? o.vehicle) ?? null, vehicleMpg: vehicleMpg ?? null,
     estimatedGallons: estimatedGallons ?? null,
     scheduledDeparture: scheduledDeparture ?? null, scheduledArrival: scheduledArrival ?? null,
     journeyId: str(o.journeyId) ?? null, legIndex: legIndex ?? 0, legTotal: legTotal ?? 1,
@@ -538,6 +539,8 @@ export function errorResponse(err: unknown): Response {
   if (err instanceof ApiError) {
     return Response.json({ error: err.message, ...(err.details ? { details: err.details } : {}) }, { status: err.status });
   }
+  const custom = err as { status?: number; httpBody?: Record<string, unknown> } | null;
+  if (custom && typeof custom.status === "number" && custom.httpBody) return Response.json(custom.httpBody, { status: custom.status });
   const code = (err as { code?: string } | null)?.code;
   if (code === "P2025") return Response.json({ error: "Not found" }, { status: 404 });
   if (code === "P2002") return Response.json({ error: "Already exists (unique constraint)" }, { status: 409 });

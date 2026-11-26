@@ -1,15 +1,27 @@
 import { prisma } from "@/lib/db";
 import { NextRequest } from "next/server";
 import {
-  ApiError, SCHEDULED_KNOWN_KEYS, parseIdBody, parseScheduledCreate, parseScheduledPatch, readBody, route,
+  ApiError, SCHEDULED_KNOWN_KEYS, parseIdBody, parseScheduledPatch, readBody, route,
 } from "@/lib/api-input";
+import { appTimeZone, createScheduledDrive } from "@/lib/context";
 
-// Wall-clock `date` + `departure_time` values without a UTC offset are read in this IANA zone
-// (a `timezone` field in the body overrides it). Falls back to UTC.
-const defaultTimeZone = () => process.env.APP_TIMEZONE || "UTC";
+// Wall-clock `date` + `departure_time` values without a UTC offset are read in the body's `timezone`,
+// else APP_TIMEZONE, else UTC (see appTimeZone in lib/context.ts).
+const defaultTimeZone = () => appTimeZone();
 
-export const GET = route(async () => {
-  const drives = await prisma.scheduledDrive.findMany({ orderBy: { departure: "asc" } });
+// `?upcoming=true` → only enabled, non-canceled drives that depart from an hour ago on (or repeat);
+// `?limit=` caps the count. Lets an assistant check for duplicates cheaply.
+export const GET = route(async (request: NextRequest) => {
+  const sp = request.nextUrl.searchParams;
+  const upcoming = sp.get("upcoming") === "true";
+  const limit = Math.min(Math.max(Number(sp.get("limit")) || 0, 0), 200);
+  const drives = await prisma.scheduledDrive.findMany({
+    where: upcoming
+      ? { isCanceled: false, isEnabled: true, OR: [{ departure: { gte: new Date(Date.now() - 3600_000) } }, { repeatRule: { not: "NONE" } }] }
+      : undefined,
+    orderBy: { departure: "asc" },
+    ...(limit ? { take: limit } : {}),
+  });
   return Response.json(drives);
 });
 
@@ -18,9 +30,8 @@ export const GET = route(async () => {
 // friendly ones (`date`, `departure_time`, `start`, `end`, `stops`). Bad input → 400/422 JSON, never 500.
 export const POST = route(async (request: NextRequest) => {
   const body = await readBody(request, SCHEDULED_KNOWN_KEYS);
-  const data = parseScheduledCreate(body, { defaultTimeZone: defaultTimeZone() });
-  const drive = await prisma.scheduledDrive.create({ data });
-  return Response.json(drive, { status: 201 });
+  // Resolves place names, payer and vehicle (422 with suggestions if it can't), then creates.
+  return Response.json(await createScheduledDrive(body), { status: 201 });
 });
 
 // Partial update: only keys present in the body change.

@@ -1,8 +1,9 @@
 import { prisma } from "@/lib/db";
 import { NextRequest } from "next/server";
 import {
-  TRIP_KNOWN_KEYS, parseIdBody, parseTripCreate, parseTripPatch, readBody, route,
+  TRIP_KNOWN_KEYS, parseIdBody, parseTripPatch, readBody, route,
 } from "@/lib/api-input";
+import { createTripRecord } from "@/lib/context";
 
 const CATEGORY_VALUES = ["COMMUTE", "ERRAND", "ROAD_TRIP", "SCHOOL", "WORK", "LEISURE", "OTHER"];
 
@@ -90,8 +91,8 @@ export const GET = route(async (request: NextRequest) => {
 });
 
 export const POST = route(async (request: NextRequest) => {
-  const data = parseTripCreate(await readBody(request, TRIP_KNOWN_KEYS));
-  const trip = await prisma.trip.create({ data: data as never });
+  // Resolves place names, payer and vehicle (422 with suggestions if it can't), then creates.
+  const trip = await createTripRecord(await readBody(request, TRIP_KNOWN_KEYS));
   return Response.json(trip, { status: 201 });
 });
 

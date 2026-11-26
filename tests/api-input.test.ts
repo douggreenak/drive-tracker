@@ -100,7 +100,7 @@ test("trip create / patch", () => {
   const t = parseTripCreate({ trip: JSON.stringify({ startAddress: "A", endAddress: "B", distance: "12.5", duration: 900, category: "errand", stops: "Costco" }) });
   assert.equal(t.distance, 12.5);
   assert.equal(t.category, "ERRAND");
-  assert.equal(t.paidBy, "SELF");
+  assert.equal(t.paidBy, undefined);
   assert.ok(t.date instanceof Date);
   assert.throws(() => parseTripCreate({ startAddress: "A" }), (e) => e instanceof ApiError && e.details!.length === 2);
   assert.throws(() => parseTripCreate({ distance: 1, duration: 1, date: "nope", category: "X" }), (e) => e instanceof ApiError && e.details!.length === 2);

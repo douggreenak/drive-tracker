@@ -71,3 +71,13 @@ body's `timezone` (IANA name) or the `APP_TIMEZONE` env var, else UTC. Errors ar
 `400` malformed body, `401` auth, `404` unknown id, `422` `{error, details:[{field,message}]}`.
 
 Tests: `npm test` (Node's built-in runner, no extra dependencies).
+
+### Assistant-friendly API (no guessing)
+
+`GET /api/context` returns timezone, defaults (payer, vehicle, home), saved places, vehicles, payer
+groups, recent addresses/trips and upcoming scheduled drives. `GET /api/resolve?q=Home&q=Fred%20Meyer`
+dry-runs the resolver. `POST /api/scheduled` and `POST /api/trips` resolve place names against saved
+places and recently used addresses (no geocoder is used), default `paidBy`/`vehicle`, and return
+`422 {error, field, unresolved, hint, suggestions}` for anything they can't resolve. Server env:
+`APP_TIMEZONE` (IANA zone) and optionally `DEFAULT_VEHICLE`. MCP tools: `get_context`,
+`resolve_places`, `create_scheduled_drive`, `log_trip`.

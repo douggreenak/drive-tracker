@@ -2,7 +2,8 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { GET as statsGET } from "@/app/api/stats/route";
-import { ApiError, errorResponse, parseDate, parseScheduledCreate } from "@/lib/api-input";
+import { ApiError, errorResponse, parseDate } from "@/lib/api-input";
+import { buildContext, createScheduledDrive, createTripRecord, resolveNames } from "@/lib/context";
 
 const CATEGORIES = ["COMMUTE", "ERRAND", "ROAD_TRIP", "SCHOOL", "WORK", "LEISURE", "OTHER"] as const;
 const FUEL_TYPES = ["REGULAR", "MIDGRADE", "PREMIUM", "DIESEL"] as const;
@@ -31,7 +32,8 @@ function safe<A extends any[]>(handler: (...args: A) => Promise<any>) {
     } catch (err) {
       const res = errorResponse(err);
       const body = (await res.json().catch(() => ({}))) as { error?: string };
-      return fail(body.error ?? "Request failed");
+      // 422s carry suggestions / valid options the assistant needs — pass the whole JSON through.
+      return fail(res.status === 422 ? JSON.stringify(body, null, 2) : (body.error ?? "Request failed"));
     }
   };
 }
@@ -107,27 +109,20 @@ export function createMcpServer() {
   });
 
   server.registerTool("log_trip", {
-    description: "Log a drive after the fact (manual entry). For recorded GPS trips use the iOS app.",
+    description: "Log a drive after the fact (manual entry). Place names (\"Home\", \"Fred Meyer\") are resolved against saved places and recent addresses; if one can't be resolved to a real street address the call fails with {unresolved, suggestions} — ask the user, don't guess. paidBy and vehicle default to the user's defaults (call get_context). For recorded GPS trips use the iOS app.",
     inputSchema: {
-      date: z.string().describe("ISO start time"),
-      startAddress: z.string(), endAddress: z.string(),
-      startLat: z.number().default(0), startLng: z.number().default(0),
-      endLat: z.number().default(0), endLng: z.number().default(0),
+      date: z.string().optional().describe("ISO start time (default: now)"),
+      startAddress: z.string().describe("Saved-place name or full street address"),
+      endAddress: z.string().describe("Saved-place name or full street address"),
+      stops: z.union([z.string(), z.array(z.string())]).optional(),
       distance: z.number().min(0).describe("Miles"),
       duration: z.number().int().min(0).describe("Seconds"),
-      category: z.enum(CATEGORIES).default("OTHER"),
-      paidBy: z.string().default("SELF").describe("PayerGroup key, e.g. SELF or PARENTS"),
-      notes: z.string().optional(), vehicleName: z.string().optional(),
+      category: z.enum(CATEGORIES).optional(),
+      paidBy: z.string().optional().describe("PayerGroup key or label; aliases like \"parents\"/\"me\" work. Default: user's default payer"),
+      vehicle: z.string().optional().describe("Vehicle name (case-insensitive, partial ok). Default: user's default vehicle"),
+      notes: z.string().optional(),
     },
-  }, async (a) => {
-    const date = parseDate(a.date);
-    if (!date) return fail("Invalid date: use ISO 8601, e.g. 2026-11-26T11:18:00-09:00");
-    const trip = await prisma.trip.create({
-      data: { ...a, date, isManualEntry: true },
-      select: TRIP_SUMMARY,
-    });
-    return json(trip);
-  });
+  }, async (a) => json(await createTripRecord({ ...a, isManualEntry: true }, { manual: true })));
 
   server.registerTool("update_trip", {
     description: "Edit a trip's category, notes, favorite flag, or payer. Only provided fields change.",
@@ -185,13 +180,20 @@ export function createMcpServer() {
 
   server.registerTool("list_scheduled_drives", {
     description: "List scheduled/recurring drives, soonest first.",
-    inputSchema: { includeCanceled: z.boolean().optional() },
-  }, async ({ includeCanceled }) => json(await prisma.scheduledDrive.findMany({
-    where: includeCanceled ? {} : { isCanceled: false }, orderBy: { departure: "asc" },
+    inputSchema: {
+      includeCanceled: z.boolean().optional(),
+      upcomingOnly: z.boolean().optional().describe("Only drives departing from an hour ago on, plus repeating ones"),
+    },
+  }, async ({ includeCanceled, upcomingOnly }) => json(await prisma.scheduledDrive.findMany({
+    where: {
+      ...(includeCanceled ? {} : { isCanceled: false }),
+      ...(upcomingOnly ? { OR: [{ departure: { gte: new Date(Date.now() - 3600_000) } }, { repeatRule: { not: "NONE" as const } }] } : {}),
+    },
+    orderBy: { departure: "asc" },
   })));
 
   server.registerTool("create_scheduled_drive", {
-    description: "Schedule a future drive. Give `date` (YYYY-MM-DD) + `departure_time` (\"11:18\" or \"11:18 AM\"), or a full ISO `departure`. `stops` may be a list of place names (or one string; separate several with `;`). Times without a UTC offset use `timezone` or the server default.",
+    description: "Schedule a future drive. Place names (start/stops/end) are resolved against saved places and recent addresses; unresolvable ones fail with {unresolved, suggestions} — ask the user instead of guessing. paidBy and vehicle default to the user's defaults (see get_context). Give `date` (YYYY-MM-DD) + `departure_time` (\"11:18\" or \"11:18 AM\"), or a full ISO `departure`. `stops` may be a list of place names (or one string; separate several with `;`). Times without a UTC offset use `timezone` or the server default.",
     inputSchema: {
       date: z.string().optional().describe("YYYY-MM-DD"),
       departure_time: z.string().optional().describe("HH:mm or h:mm AM/PM"),
@@ -203,12 +205,22 @@ export function createMcpServer() {
       category: z.enum(CATEGORIES).optional(),
       repeat: z.enum(["NONE", "DAILY", "WEEKDAYS", "WEEKLY"]).optional(),
       estimated_minutes: z.number().min(0).optional(),
+      paidBy: z.string().optional().describe("PayerGroup key or label; aliases like \"parents\"/\"me\" work. Default: user's default payer"),
+      vehicle: z.string().optional().describe("Vehicle name (case-insensitive, partial ok). Default: user's default vehicle"),
       timezone: z.string().optional().describe("IANA zone, e.g. America/Anchorage"),
     },
   }, async (a) => {
-    const data = parseScheduledCreate(a, { defaultTimeZone: process.env.APP_TIMEZONE || "UTC" });
-    return json(await prisma.scheduledDrive.create({ data }));
+    return json(await createScheduledDrive(a));
   });
+
+  server.registerTool("get_context", {
+    description: "Call this FIRST before logging or scheduling a drive. Returns the user's timezone, defaults (payer, vehicle, home address), saved places, vehicles, payer groups, recent addresses/trips and upcoming scheduled drives (to avoid duplicates).",
+  }, async () => json(await buildContext()));
+
+  server.registerTool("resolve_places", {
+    description: "Dry-run the place resolver: shows what address each name (\"Home\", \"Fred Meyer\") would resolve to, or suggestions if it can't be resolved.",
+    inputSchema: { names: z.array(z.string()).min(1).max(10) },
+  }, async ({ names }) => json({ results: await resolveNames(names) }));
 
   server.registerTool("list_saved_places", { description: "List saved places (Home, Work, …)." }, async () =>
     json(await prisma.savedPlace.findMany({ orderBy: { sortOrder: "asc" } })));
