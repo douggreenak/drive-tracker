@@ -8,7 +8,8 @@
     "build": "prisma migrate deploy && next build",
     "start": "next start",
     "lint": "eslint",
-    "mcp:token": "node scripts/mint-mcp-token.mjs"
+    "mcp:token": "node scripts/mint-mcp-token.mjs",
+    "test": "node --test tests/*.test.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.2",

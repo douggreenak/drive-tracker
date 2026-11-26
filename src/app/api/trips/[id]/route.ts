@@ -1,8 +1,9 @@
 import { prisma } from "@/lib/db";
 import { NextRequest } from "next/server";
+import { route } from "@/lib/api-input";
 
 // Single trip with its gas entries and route polyline — powers the web trip-detail page.
-export async function GET(_request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+export const GET = route(async (_request: NextRequest, { params }: { params: Promise<{ id: string }> }) => {
   const { id } = await params;
   const trip = await prisma.trip.findUnique({
     where: { id },
@@ -47,4 +48,4 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
   });
   if (!trip) return Response.json({ error: "Trip not found" }, { status: 404 });
   return Response.json(trip);
-}
+});

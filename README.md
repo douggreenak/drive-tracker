@@ -54,3 +54,20 @@ Tools: `get_stats`, `list_trips`, `get_trip`, `log_trip`, `update_trip`, `list_g
 `add_gas_entry`, `list_vehicles`, `list_scheduled_drives`, `list_saved_places`,
 `list_payer_groups`, `get_settings`. There is deliberately no delete tool. Rotating
 `MCP_TOKEN_SECRET` revokes all tokens.
+
+### Creating a scheduled drive (`POST /api/scheduled`)
+
+The body may be the object, the object wrapped in one field (`{"scheduled": {...}}`), or either
+JSON-encoded as a string. snake_case and camelCase keys both work.
+
+```bash
+curl -X POST https://<your-domain>/api/scheduled -H "x-api-key: $API_KEY" -H "Content-Type: application/json" \
+  -d '{"date":"2026-11-26","departure_time":"11:18 AM","start":"Current location","stops":["Fred Meyer"],"end":"Home","notes":"Round trip"}'
+```
+
+Required: a departure (`departure` ISO 8601, or `date` + `departure_time` as `11:18` / `11:18 AM`) and a
+destination (`end`, or at least one stop). Everything else has defaults. Offset-less times are read in the
+body's `timezone` (IANA name) or the `APP_TIMEZONE` env var, else UTC. Errors are JSON:
+`400` malformed body, `401` auth, `404` unknown id, `422` `{error, details:[{field,message}]}`.
+
+Tests: `npm test` (Node's built-in runner, no extra dependencies).

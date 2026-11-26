@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { GET as statsGET } from "@/app/api/stats/route";
+import { ApiError, errorResponse, parseDate, parseScheduledCreate } from "@/lib/api-input";
 
 const CATEGORIES = ["COMMUTE", "ERRAND", "ROAD_TRIP", "SCHOOL", "WORK", "LEISURE", "OTHER"] as const;
 const FUEL_TYPES = ["REGULAR", "MIDGRADE", "PREMIUM", "DIESEL"] as const;
@@ -14,7 +15,25 @@ function fail(message: string) {
 }
 function dateRange(from?: string, to?: string) {
   if (!from && !to) return undefined;
-  return { ...(from ? { gte: new Date(from) } : {}), ...(to ? { lte: new Date(to) } : {}) };
+  const f = from ? parseDate(from) : undefined;
+  const t = to ? parseDate(to) : undefined;
+  if ((from && !f) || (to && !t)) throw new ApiError(400, "from/to must be valid dates (ISO 8601, e.g. 2026-11-26)");
+  return { ...(f ? { gte: f } : {}), ...(t ? { lte: t } : {}) };
+}
+
+// Turn any thrown error (validation, unknown id, DB constraint) into a clear MCP tool error
+// instead of an opaque protocol failure.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function safe<A extends any[]>(handler: (...args: A) => Promise<any>) {
+  return async (...args: A) => {
+    try {
+      return await handler(...args);
+    } catch (err) {
+      const res = errorResponse(err);
+      const body = (await res.json().catch(() => ({}))) as { error?: string };
+      return fail(body.error ?? "Request failed");
+    }
+  };
 }
 
 // Trip columns safe to return to an LLM — excludes the large encoded route/polyline blobs.
@@ -26,6 +45,10 @@ const TRIP_SUMMARY = {
 
 export function createMcpServer() {
   const server = new McpServer({ name: "drive-tracker", version: "1.0.0" });
+  // Every tool handler runs inside safe(); the override is runtime-only so tool arg types still infer.
+  const register = server.registerTool.bind(server) as (n: string, c: unknown, h: never) => unknown;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (server as any).registerTool = (name: string, config: unknown, handler: any) => register(name, config, safe(handler) as never);
 
   server.registerTool("get_stats", {
     description: "Overall driving and fuel statistics: totals, this week/month, cost per mile, avg MPG, category counts, and period-over-period comparison.",
@@ -49,6 +72,7 @@ export function createMcpServer() {
       offset: z.number().int().min(0).optional(),
     },
   }, async (a) => {
+    const range = dateRange(a.from, a.to);
     const where = {
       ...(a.search ? { OR: [
         { startAddress: { contains: a.search, mode: "insensitive" as const } },
@@ -57,7 +81,7 @@ export function createMcpServer() {
       ] } : {}),
       ...(a.category ? { category: a.category } : {}),
       ...(a.favoritesOnly ? { isFavorite: true } : {}),
-      ...(dateRange(a.from, a.to) ? { date: dateRange(a.from, a.to) } : {}),
+      ...(range ? { date: range } : {}),
     };
     const [items, total] = await Promise.all([
       prisma.trip.findMany({
@@ -96,9 +120,10 @@ export function createMcpServer() {
       notes: z.string().optional(), vehicleName: z.string().optional(),
     },
   }, async (a) => {
-    if (!Number.isFinite(Date.parse(a.date))) return fail("Invalid date");
+    const date = parseDate(a.date);
+    if (!date) return fail("Invalid date: use ISO 8601, e.g. 2026-11-26T11:18:00-09:00");
     const trip = await prisma.trip.create({
-      data: { ...a, date: new Date(a.date), isManualEntry: true },
+      data: { ...a, date, isManualEntry: true },
       select: TRIP_SUMMARY,
     });
     return json(trip);
@@ -112,10 +137,12 @@ export function createMcpServer() {
       isFavorite: z.boolean().optional(), paidBy: z.string().optional(),
     },
   }, async ({ id, ...data }) => {
+    if (Object.values(data).every((v) => v === undefined)) return fail("Provide at least one field to change");
     try {
       return json(await prisma.trip.update({ where: { id }, data, select: TRIP_SUMMARY }));
-    } catch {
-      return fail(`Trip ${id} not found`);
+    } catch (err) {
+      if ((err as { code?: string }).code === "P2025") return fail(`Trip ${id} not found`);
+      throw err;
     }
   });
 
@@ -146,9 +173,10 @@ export function createMcpServer() {
       vehicleName: z.string().optional(), tripId: z.string().optional(),
     },
   }, async (a) => {
-    if (!Number.isFinite(Date.parse(a.date))) return fail("Invalid date");
+    const date = parseDate(a.date);
+    if (!date) return fail("Invalid date: use ISO 8601, e.g. 2026-11-26");
     return json(await prisma.gasEntry.create({
-      data: { ...a, date: new Date(a.date), totalCost: a.gallons * a.pricePerGallon },
+      data: { ...a, date, totalCost: a.gallons * a.pricePerGallon },
     }));
   });
 
@@ -161,6 +189,26 @@ export function createMcpServer() {
   }, async ({ includeCanceled }) => json(await prisma.scheduledDrive.findMany({
     where: includeCanceled ? {} : { isCanceled: false }, orderBy: { departure: "asc" },
   })));
+
+  server.registerTool("create_scheduled_drive", {
+    description: "Schedule a future drive. Give `date` (YYYY-MM-DD) + `departure_time` (\"11:18\" or \"11:18 AM\"), or a full ISO `departure`. `stops` may be a list of place names (or one string; separate several with `;`). Times without a UTC offset use `timezone` or the server default.",
+    inputSchema: {
+      date: z.string().optional().describe("YYYY-MM-DD"),
+      departure_time: z.string().optional().describe("HH:mm or h:mm AM/PM"),
+      departure: z.string().optional().describe("Full ISO 8601 departure; alternative to date + departure_time"),
+      start: z.string().optional().describe("Defaults to \"Current location\""),
+      stops: z.union([z.string(), z.array(z.string())]).optional(),
+      end: z.string().optional().describe("Defaults to the last stop"),
+      title: z.string().optional(), notes: z.string().optional(),
+      category: z.enum(CATEGORIES).optional(),
+      repeat: z.enum(["NONE", "DAILY", "WEEKDAYS", "WEEKLY"]).optional(),
+      estimated_minutes: z.number().min(0).optional(),
+      timezone: z.string().optional().describe("IANA zone, e.g. America/Anchorage"),
+    },
+  }, async (a) => {
+    const data = parseScheduledCreate(a, { defaultTimeZone: process.env.APP_TIMEZONE || "UTC" });
+    return json(await prisma.scheduledDrive.create({ data }));
+  });
 
   server.registerTool("list_saved_places", { description: "List saved places (Home, Work, …)." }, async () =>
     json(await prisma.savedPlace.findMany({ orderBy: { sortOrder: "asc" } })));

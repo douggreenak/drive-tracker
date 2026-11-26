@@ -1,11 +1,16 @@
 import { prisma } from "@/lib/db";
 import { NextRequest } from "next/server";
+import {
+  TRIP_KNOWN_KEYS, parseIdBody, parseTripCreate, parseTripPatch, readBody, route,
+} from "@/lib/api-input";
 
-export async function GET(request: NextRequest) {
+const CATEGORY_VALUES = ["COMMUTE", "ERRAND", "ROAD_TRIP", "SCHOOL", "WORK", "LEISURE", "OTHER"];
+
+export const GET = route(async (request: NextRequest) => {
   const searchParams = request.nextUrl.searchParams;
   const search = searchParams.get("search");
   const sort = searchParams.get("sort") || "date";
-  const order = searchParams.get("order") || "desc";
+  const order = searchParams.get("order") === "asc" ? "asc" : "desc";
   const category = searchParams.get("category");
   const favoritesOnly = searchParams.get("favorites") === "true";
   const from = searchParams.get("from");
@@ -19,6 +24,14 @@ export async function GET(request: NextRequest) {
   const full = searchParams.get("full") === "true";
 
   const where: Record<string, unknown> = {};
+  const fromDate = from ? new Date(from) : null;
+  const toDate = to ? new Date(to) : null;
+  if ((fromDate && Number.isNaN(fromDate.getTime())) || (toDate && Number.isNaN(toDate.getTime()))) {
+    return Response.json({ error: "from/to must be valid dates (ISO 8601)" }, { status: 400 });
+  }
+  if (category && !CATEGORY_VALUES.includes(category)) {
+    return Response.json({ error: `category must be one of ${CATEGORY_VALUES.join(", ")}` }, { status: 400 });
+  }
 
   if (search) {
     where.OR = [
@@ -31,8 +44,8 @@ export async function GET(request: NextRequest) {
   if (favoritesOnly) where.isFavorite = true;
   if (from || to) {
     where.date = {};
-    if (from) (where.date as Record<string, unknown>).gte = new Date(from);
-    if (to) (where.date as Record<string, unknown>).lte = new Date(to);
+    if (fromDate) (where.date as Record<string, unknown>).gte = fromDate;
+    if (toDate) (where.date as Record<string, unknown>).lte = toDate;
   }
 
   const orderBy: Record<string, string>[] = [];
@@ -74,86 +87,30 @@ export async function GET(request: NextRequest) {
     requestedPage !== null ? prisma.trip.count({ where }) : Promise.resolve(0),
   ]);
   return Response.json(requestedPage !== null ? { items: trips, total, page, pageSize } : trips);
-}
+});
 
-export async function POST(request: NextRequest) {
-  const body = await request.json();
-  const trip = await prisma.trip.create({
-    data: {
-      date: new Date(body.date),
-      endDate: body.endDate ? new Date(body.endDate) : null,
-      startAddress: body.startAddress,
-      endAddress: body.endAddress,
-      startLat: body.startLat,
-      startLng: body.startLng,
-      endLat: body.endLat,
-      endLng: body.endLng,
-      distance: body.distance,
-      duration: body.duration,
-      movingSeconds: body.movingSeconds != null ? Math.trunc(Number(body.movingSeconds)) : null,
-      maxSpeed: body.maxSpeed != null ? Number(body.maxSpeed) : null,
-      avgSpeed: body.avgSpeed != null ? Number(body.avgSpeed) : null,
-      notes: body.notes || null,
-      name: body.name || null,
-      routeEncoded: body.routeEncoded || null,
-      matchedPolyline: body.matchedPolyline || null,
-      matchedFraction: body.matchedFraction != null ? Number(body.matchedFraction) : null,
-      usedRouteMatching: body.usedRouteMatching === true,
-      category: body.category || "OTHER",
-      isFavorite: body.isFavorite || false,
-      paidBy: body.paidBy ? String(body.paidBy) : "SELF",
-      vehicleName: body.vehicleName || null,
-      vehicleMpg: body.vehicleMpg != null ? Number(body.vehicleMpg) : null,
-      estimatedGallons: body.estimatedGallons != null ? Number(body.estimatedGallons) : null,
-      scheduledDeparture: body.scheduledDeparture ? new Date(body.scheduledDeparture) : null,
-      scheduledArrival: body.scheduledArrival ? new Date(body.scheduledArrival) : null,
-      journeyId: body.journeyId || null,
-      legIndex: body.legIndex != null ? Math.trunc(Number(body.legIndex)) : 0,
-      legTotal: body.legTotal != null ? Math.trunc(Number(body.legTotal)) : 1,
-      isManualEntry: body.isManualEntry === true,
-      stops: Array.isArray(body.stops) ? body.stops : undefined,
-    },
-  });
+export const POST = route(async (request: NextRequest) => {
+  const data = parseTripCreate(await readBody(request, TRIP_KNOWN_KEYS));
+  const trip = await prisma.trip.create({ data: data as never });
   return Response.json(trip, { status: 201 });
-}
+});
 
-export async function DELETE(request: NextRequest) {
-  const { id } = await request.json();
+export const DELETE = route(async (request: NextRequest) => {
+  const id = parseIdBody(await readBody(request, new Set(["id"])), "trip");
   // Remove the trip and everything tied to it. Gas entries reference the trip, so they must go
   // first (the FK has no cascade) — do both in one transaction so a trip is never left with
-  // orphaned fuel rows.
+  // orphaned fuel rows. An unknown id surfaces as a 404 (Prisma P2025).
   await prisma.$transaction([
     prisma.gasEntry.deleteMany({ where: { tripId: id } }),
     prisma.trip.delete({ where: { id } }),
   ]);
   return Response.json({ success: true });
-}
+});
 
-export async function PATCH(request: NextRequest) {
-  const body = await request.json();
-  const { id } = body;
-  if (!id) return Response.json({ error: "Missing id" }, { status: 400 });
-
-  // Only allow a known set of editable fields — never spread arbitrary client
-  // JSON into the update, which would let any column be overwritten.
-  const data: Record<string, unknown> = {};
-  if ("isFavorite" in body) data.isFavorite = body.isFavorite === true || body.isFavorite === "true";
-  if ("category" in body) data.category = body.category;
-  if ("notes" in body) data.notes = body.notes;
-  if ("date" in body) data.date = new Date(body.date);
-  if ("paidBy" in body) data.paidBy = body.paidBy ? String(body.paidBy) : "SELF";
-  if ("stops" in body && Array.isArray(body.stops)) data.stops = body.stops;
-  // Trimming a trip (cutting off a forgotten tail/start) rewrites the geometry + stats + endpoints.
-  if ("distance" in body) data.distance = Number(body.distance) || 0;
-  if ("duration" in body) data.duration = Math.trunc(Number(body.duration) || 0);
-  if ("routeEncoded" in body) data.routeEncoded = body.routeEncoded == null ? null : String(body.routeEncoded);
-  if ("startAddress" in body) data.startAddress = String(body.startAddress);
-  if ("endAddress" in body) data.endAddress = String(body.endAddress);
-  if ("startLat" in body) data.startLat = Number(body.startLat);
-  if ("startLng" in body) data.startLng = Number(body.startLng);
-  if ("endLat" in body) data.endLat = Number(body.endLat);
-  if ("endLng" in body) data.endLng = Number(body.endLng);
-
-  const trip = await prisma.trip.update({ where: { id }, data });
+// Only a known set of editable fields is accepted — never spread arbitrary client JSON into the
+// update. Trimming a trip rewrites geometry + stats + endpoints, hence the distance/route fields.
+export const PATCH = route(async (request: NextRequest) => {
+  const { id, data } = parseTripPatch(await readBody(request, TRIP_KNOWN_KEYS));
+  const trip = await prisma.trip.update({ where: { id }, data: data as never });
   return Response.json(trip);
-}
+});
