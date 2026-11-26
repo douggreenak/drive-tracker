@@ -3,13 +3,13 @@ import { NextRequest } from "next/server";
 import {
   ApiError, SCHEDULED_KNOWN_KEYS, parseIdBody, parseScheduledPatch, readBody, route,
 } from "@/lib/api-input";
-import { appTimeZone, createScheduledDrive } from "@/lib/context";
+import { appTimeZone, createScheduledDrive, upcomingWhere } from "@/lib/context";
 
 // Wall-clock `date` + `departure_time` values without a UTC offset are read in the body's `timezone`,
 // else APP_TIMEZONE, else UTC (see appTimeZone in lib/context.ts).
 const defaultTimeZone = () => appTimeZone();
 
-// `?upcoming=true` → only enabled, non-canceled drives that depart from an hour ago on (or repeat);
+// `?upcoming=true` → only enabled, non-canceled drives departing today (local time) or later, plus repeating ones;
 // `?limit=` caps the count. Lets an assistant check for duplicates cheaply.
 export const GET = route(async (request: NextRequest) => {
   const sp = request.nextUrl.searchParams;
@@ -17,7 +17,7 @@ export const GET = route(async (request: NextRequest) => {
   const limit = Math.min(Math.max(Number(sp.get("limit")) || 0, 0), 200);
   const drives = await prisma.scheduledDrive.findMany({
     where: upcoming
-      ? { isCanceled: false, isEnabled: true, OR: [{ departure: { gte: new Date(Date.now() - 3600_000) } }, { repeatRule: { not: "NONE" } }] }
+      ? upcomingWhere()
       : undefined,
     orderBy: { departure: "asc" },
     ...(limit ? { take: limit } : {}),

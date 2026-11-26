@@ -3,7 +3,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { GET as statsGET } from "@/app/api/stats/route";
 import { ApiError, errorResponse, parseDate } from "@/lib/api-input";
-import { buildContext, createScheduledDrive, createTripRecord, resolveNames } from "@/lib/context";
+import { buildContext, createScheduledDrive, upcomingWhere, createTripRecord, resolveNames } from "@/lib/context";
 
 const CATEGORIES = ["COMMUTE", "ERRAND", "ROAD_TRIP", "SCHOOL", "WORK", "LEISURE", "OTHER"] as const;
 const FUEL_TYPES = ["REGULAR", "MIDGRADE", "PREMIUM", "DIESEL"] as const;
@@ -182,12 +182,12 @@ export function createMcpServer() {
     description: "List scheduled/recurring drives, soonest first.",
     inputSchema: {
       includeCanceled: z.boolean().optional(),
-      upcomingOnly: z.boolean().optional().describe("Only drives departing from an hour ago on, plus repeating ones"),
+      upcomingOnly: z.boolean().optional().describe("Only drives departing today (local time) or later, plus repeating ones"),
     },
   }, async ({ includeCanceled, upcomingOnly }) => json(await prisma.scheduledDrive.findMany({
     where: {
       ...(includeCanceled ? {} : { isCanceled: false }),
-      ...(upcomingOnly ? { OR: [{ departure: { gte: new Date(Date.now() - 3600_000) } }, { repeatRule: { not: "NONE" as const } }] } : {}),
+      ...(upcomingOnly ? { OR: upcomingWhere().OR } : {}),
     },
     orderBy: { departure: "asc" },
   })));

@@ -279,7 +279,12 @@ function fromDateAndTime(dateRaw: unknown, t: { h: number; m: number; s: number 
  * Validate + normalise a scheduled-drive create body into DB-ready columns.
  * Missing optional fields get defaults; problems throw ApiError(422) listing every bad field.
  */
-export function parseScheduledCreate(raw: unknown, opts: { defaultTimeZone?: string } = {}): ScheduledInput {
+export function parseScheduledCreate(raw: unknown, opts: { defaultTimeZone?: string; defaultStart?: string } = {}): ScheduledInput {
+  return parseScheduledCreateWithMeta(raw, opts).data;
+}
+
+/** Same as parseScheduledCreate, also reporting whether the start was missing and defaulted. */
+export function parseScheduledCreateWithMeta(raw: unknown, opts: { defaultTimeZone?: string; defaultStart?: string } = {}): { data: ScheduledInput; startDefaulted: boolean; titleDefaulted: boolean } {
   const o = camelKeys(unwrapPayload(raw, SCHEDULED_KEYS));
   const errors: Array<{ field: string; message: string }> = [];
   const stopErrs: string[] = [];
@@ -289,7 +294,8 @@ export function parseScheduledCreate(raw: unknown, opts: { defaultTimeZone?: str
   const stops = normalizeStops(o.stops, stopErrs);
   stopErrs.forEach((m) => errors.push({ field: "stops", message: m }));
 
-  const startAddress = str(o.startAddress) ?? str(o.start) ?? "Current location";
+  const givenStart = str(o.startAddress) ?? str(o.start);
+  const startAddress = givenStart ?? opts.defaultStart ?? "Current location";
   const endAddress = str(o.endAddress) ?? str(o.end) ?? (stops?.length ? stops[stops.length - 1].address : undefined);
   if (!endAddress) errors.push({ field: "end", message: 'required: destination address (or at least one stop)' });
 
@@ -342,7 +348,7 @@ export function parseScheduledCreate(raw: unknown, opts: { defaultTimeZone?: str
 
   if (errors.length || !departure) fail(errors.length ? errors : [{ field: "departure", message: "required" }]);
 
-  return {
+  const data: ScheduledInput = {
     title: str(o.title) ?? `Drive to ${stops?.length && !str(o.endAddress ?? o.end) ? stops[stops.length - 1].address : endAddress}`,
     startAddress, endAddress: endAddress!, startLat, startLng, endLat, endLng,
     departure, estimatedTravelTime: travel,
@@ -358,6 +364,14 @@ export function parseScheduledCreate(raw: unknown, opts: { defaultTimeZone?: str
     skippedOccurrences: numArray(o.skippedOccurrences),
     canceledOccurrences: numArray(o.canceledOccurrences),
   };
+  return { data, startDefaulted: givenStart === undefined, titleDefaulted: str(o.title) === undefined };
+}
+
+/** Midnight at the start of "today" in `timeZone` — the cut-off for "upcoming" drives. */
+export function startOfLocalDay(timeZone: string, now: Date = new Date()): Date {
+  const parts = new Intl.DateTimeFormat("en-US", { timeZone, year: "numeric", month: "numeric", day: "numeric" }).formatToParts(now);
+  const g = (t: string) => Number(parts.find((p) => p.type === t)!.value);
+  return zonedInstant({ y: g("year"), mo: g("month"), d: g("day") }, { h: 0, m: 0, s: 0 }, timeZone);
 }
 
 /** Partial update: only keys present are validated and returned. `id` is returned separately. */

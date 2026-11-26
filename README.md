@@ -67,7 +67,7 @@ curl -X POST https://<your-domain>/api/scheduled -H "x-api-key: $API_KEY" -H "Co
 
 Required: a departure (`departure` ISO 8601, or `date` + `departure_time` as `11:18` / `11:18 AM`) and a
 destination (`end`, or at least one stop). Everything else has defaults. Offset-less times are read in the
-body's `timezone` (IANA name) or the `APP_TIMEZONE` env var, else UTC. Errors are JSON:
+body's `timezone` (IANA name) or the `APP_TIMEZONE` env var, else America/Anchorage. Errors are JSON:
 `400` malformed body, `401` auth, `404` unknown id, `422` `{error, details:[{field,message}]}`.
 
 Tests: `npm test` (Node's built-in runner, no extra dependencies).

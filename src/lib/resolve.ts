@@ -62,15 +62,20 @@ export function levenshtein(a: string, b: string): number {
 
 const maxTypos = (len: number) => (len < 3 ? 0 : len <= 5 ? 1 : len <= 10 ? 2 : 3);
 
-/** "123 Main St, Anchorage, AK 99501" → true. Needs street number + street + city + state. */
+/**
+ * "123 Main St, Anchorage, AK 99501" or "Fred Meyer, 3627 Airport Way, Fairbanks, AK 99709" → true.
+ * Needs a street number + street, then a city and a state. A bare name ("Home") is never an address.
+ */
 export function looksLikeStreetAddress(s: string): boolean {
   const t = s.trim().replace(/,?\s*(USA|US|United States( of America)?)\.?$/i, "");
   const parts = t.split(",").map((p) => p.trim()).filter(Boolean);
-  if (parts.length < 2) return false;
-  if (!/^\d+[A-Za-z]?(-\d+)?\s+\S+/.test(parts[0])) return false; // number + street name
-  const rest = parts.slice(1).join(", ");
+  const i = parts.findIndex((p) => /^\d+[A-Za-z]?(-\d+)?\s+[A-Za-z0-9]/.test(p)); // number + street name
+  if (i === -1 || i > 2) return false;
+  const after = parts.slice(i + 1);
+  if (after.length === 0) return false;
+  const rest = after.join(", ");
   const state = /(?:^|[\s,])[A-Z]{2}(?:\s+\d{5}(?:-\d{4})?)?\s*$/.test(rest);
-  const city = parts.length >= 3 ? /[A-Za-z]{2,}/.test(parts[1]) : /[A-Za-z]{2,}\s+[A-Z]{2}\b/.test(parts[1]);
+  const city = after.length >= 2 ? /[A-Za-z]{2,}/.test(after[0]) : /[A-Za-z]{2,}\s+[A-Z]{2}\b/.test(after[0]);
   return state && city;
 }
 
@@ -82,7 +87,7 @@ export type LocationResult =
   | { kind: "current_location" }
   | { kind: "resolved"; address: string; lat: number; lng: number; label: string; matchedBy: Place["source"] | "exact_address" }
   | { kind: "street_address"; address: string }
-  | { kind: "unresolved"; reason: "not_found" | "ambiguous" | "not_a_street_address"; suggestions: Place[] };
+  | { kind: "unresolved"; reason: "not_found" | "ambiguous" | "not_a_street_address" | "saved_place_has_no_address"; suggestions: Place[]; placeLabel?: string };
 
 function namesOf(p: Place): string[] {
   const out = new Set<string>();
@@ -124,14 +129,23 @@ export function resolveLocation(input: string, lookup: Pick<Lookup, "places" | "
   const q = input.trim();
   if (CURRENT_LOCATION.test(q)) return { kind: "current_location" };
   const nq = norm(q);
-  const all = [...lookup.places, ...lookup.recents];
+  // Saved places are the user's own names; keep them even if their stored address is junk (so we can
+  // say so). History is only useful when it holds a real street address ("Home" as an address is not).
+  const recents = lookup.recents.filter((p) => looksLikeStreetAddress(p.address));
+  const all = [...lookup.places, ...recents];
 
-  // The exact stored address — reuse its coordinates.
-  const exact = all.find((p) => norm(p.address) === nq && nq);
-  if (exact) return { kind: "resolved", address: exact.address, lat: exact.lat, lng: exact.lng, label: exact.label, matchedBy: "exact_address" };
+  // A full street address: reuse stored coordinates if we know it, otherwise pass it through.
+  if (looksLikeStreetAddress(q)) {
+    const known = all.find((p) => norm(p.address) === nq);
+    if (known) return { kind: "resolved", address: known.address, lat: known.lat, lng: known.lng, label: known.label, matchedBy: "exact_address" };
+    return { kind: "street_address", address: q };
+  }
 
-  if (looksLikeStreetAddress(q)) return { kind: "street_address", address: q };
+  // Same address typed without punctuation/case ("100 spruce st anchorage ak 99501").
+  const knownText = nq ? all.find((p) => looksLikeStreetAddress(p.address) && norm(p.address) === nq) : undefined;
+  if (knownText) return { kind: "resolved", address: knownText.address, lat: knownText.lat, lng: knownText.lng, label: knownText.label, matchedBy: "exact_address" };
 
+  // Otherwise it's a name: saved-place names first, then recent places.
   if (nq) {
     let best = 99;
     const tiers = all.map((p) => { const t = tierOf(nq, p); best = Math.min(best, t); return t; });
@@ -142,6 +156,9 @@ export function resolveLocation(input: string, lookup: Pick<Lookup, "places" | "
       hits = dedupe(hits);
       if (hits.length === 1) {
         const h = hits[0];
+        if (!looksLikeStreetAddress(h.address)) {
+          return { kind: "unresolved", reason: "saved_place_has_no_address", suggestions: suggestionsFor(nq, { places: lookup.places.filter((p) => looksLikeStreetAddress(p.address)), recents }), placeLabel: h.label };
+        }
         return { kind: "resolved", address: h.address, lat: h.lat, lng: h.lng, label: h.label, matchedBy: h.source };
       }
       return { kind: "unresolved", reason: "ambiguous", suggestions: hits.slice(0, 8) };
@@ -150,7 +167,7 @@ export function resolveLocation(input: string, lookup: Pick<Lookup, "places" | "
   return {
     kind: "unresolved",
     reason: /\d/.test(q) ? "not_a_street_address" : "not_found",
-    suggestions: suggestionsFor(nq, lookup),
+    suggestions: suggestionsFor(nq, { places: lookup.places.filter((p) => looksLikeStreetAddress(p.address)), recents }),
   };
 }
 
@@ -248,7 +265,7 @@ export type ResolvedLoc = {
  */
 export function resolveLocations(locs: LocInput[], lookup: Pick<Lookup, "places" | "recents">): ResolvedLoc[] {
   const out: ResolvedLoc[] = [];
-  const bad: Array<{ field: string; name: string; reason: string }> = [];
+  const bad: Array<{ field: string; name: string; reason: string; placeLabel?: string }> = [];
   const suggestions: Place[] = [];
 
   for (const l of locs) {
@@ -263,19 +280,22 @@ export function resolveLocations(locs: LocInput[], lookup: Pick<Lookup, "places"
     if (r.kind === "current_location") out.push({ field: l.field, input: name, address: "Current location", lat: 0, lng: 0, label: null, matchedBy: "current_location" });
     else if (r.kind === "street_address") out.push({ field: l.field, input: name, address: r.address, lat: 0, lng: 0, label: null, matchedBy: "street_address" });
     else if (r.kind === "resolved") out.push({ field: l.field, input: name, address: r.address, lat: r.lat, lng: r.lng, label: r.label, matchedBy: r.matchedBy === "exact_address" ? "exact_address" : r.matchedBy });
-    else { bad.push({ field: l.field, name, reason: r.reason }); suggestions.push(...r.suggestions); }
+    else { bad.push({ field: l.field, name, reason: r.reason, placeLabel: r.placeLabel }); suggestions.push(...r.suggestions); }
   }
 
   if (bad.length) {
     const names = bad.map((b) => b.name).filter(Boolean);
     const ambiguous = bad.some((b) => b.reason === "ambiguous");
+    const noAddr = bad.find((b) => b.reason === "saved_place_has_no_address");
     throw new UnprocessableError({
       error: names.length
         ? `Could not resolve ${names.map((n) => `"${n}"`).join(", ")} to a real street address`
         : `Missing location: ${bad.map((b) => b.field).join(", ")}`,
       field: bad[0].field,
       unresolved: names,
-      hint: ambiguous
+      hint: noAddr
+        ? `The saved place "${noAddr.placeLabel}" has no real street address stored. Ask the user for its full street address (number, street, city, state) — and update the saved place (PATCH /api/saved-places) — then retry.`
+        : ambiguous
         ? "More than one saved place or recent address matches. Ask the user which one, or send the full street address."
         : "Ask the user for the full street address (number, street, city, state) or the name of a saved place, then retry.",
       suggestions: dedupe(suggestions).slice(0, 10).map((p) => ({ label: p.label, address: p.address, lat: p.lat, lng: p.lng, source: p.source })),

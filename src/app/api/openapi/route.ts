@@ -29,8 +29,8 @@ const scheduledProps = {
   date: { type: "string", example: "2026-11-26", description: "YYYY-MM-DD. Use with departure_time." },
   departure_time: { type: "string", example: "11:18 AM", description: "HH:mm (24h) or h:mm AM/PM" },
   departure: { type: "string", format: "date-time", description: "Full ISO 8601 departure; alternative to date + departure_time. Offset-less values are read in `timezone`." },
-  timezone: { type: "string", example: "America/Anchorage", description: "IANA zone for offset-less times. Default: server APP_TIMEZONE, else UTC." },
-  start: { type: "string", default: "Current location", description: "A saved-place name (\"Home\"), a recently used place name, a full street address, or \"Current location\". Names are resolved server-side; unresolvable names → 422. Alias: startAddress" },
+  timezone: { type: "string", example: "America/Anchorage", description: "IANA zone for offset-less times. Default: server APP_TIMEZONE, else America/Anchorage." },
+  start: { type: "string", default: "the saved Home address (else Current location)", description: "A saved-place name (\"Home\"), a recently used place name, a full street address, or \"Current location\". Names are resolved server-side; unresolvable names → 422. Alias: startAddress" },
   stops: { description: "Array of names/objects, or one string (several separated by `;`, `|` or newlines)", oneOf: [{ type: "array", items: stopSchema }, { type: "string" }] },
   end: { type: "string", description: "Same rules as start. Alias: endAddress. Defaults to the last stop." },
   title: { type: "string", description: "Default: \"Drive to <destination>\"" },
@@ -71,6 +71,9 @@ const spec = {
       timezone: { type: "string" }, departureLocal: { type: "string", example: "Thursday, November 26, 2026 at 11:18 AM AKST" }, scheduledArrivalLocal: { type: "string" },
       paidByLabel: { type: "string", example: "Me" }, vehicle: { type: ["object", "null"], properties: { name: { type: "string" }, avgMpg: { type: ["number", "null"] } } },
       resolvedLocations: { type: "array", items: { $ref: "#/components/schemas/ResolvedLocation" } },
+      created: { type: "boolean", description: "Always true on a 201: the record was saved and read back" },
+      defaultsApplied: { type: "array", items: { type: "string" }, description: "Defaults the server filled in, e.g. \"start → Home\"" },
+      appearsInUpcoming: { type: "boolean", description: "Whether GET /api/scheduled?upcoming=true will list it" },
       summary: { type: "string", description: "Plain-language confirmation to read back to the user" },
     } },
     TripCreated: { type: "object", description: "The stored Trip (all columns) plus confirmation fields", properties: {
@@ -109,7 +112,7 @@ const spec = {
     "/api/scheduled": (() => {
       const r = resource("Scheduled drives");
       r.get = { tags: ["Scheduled drives"], summary: "List scheduled drives", parameters: [
-        { name: "upcoming", in: "query", schema: { type: "boolean" }, description: "Only enabled, non-canceled drives departing from an hour ago on, plus repeating ones" },
+        { name: "upcoming", in: "query", schema: { type: "boolean" }, description: "Only enabled, non-canceled drives departing today (local time) or later, plus repeating ones" },
         { name: "limit", in: "query", schema: { type: "integer" } },
       ], responses: ok } as typeof r.get;
       return { ...r, post: { tags: ["Scheduled drives"], summary: "Create a scheduled drive (place names resolved server-side)", requestBody: scheduledBody, responses: { ...createdScheduled, ...errors } } };

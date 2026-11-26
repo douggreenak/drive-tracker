@@ -2,16 +2,28 @@
 // addresses) and uses it to create trips / scheduled drives with no guessing. Shared by the REST
 // routes and the MCP tools. The pure logic lives in ./resolve.ts and ./api-input.ts.
 import { prisma } from "@/lib/db";
-import { parseScheduledCreate, parseTripCreate, type Stop } from "@/lib/api-input";
+import { ApiError, parseScheduledCreateWithMeta, parseTripCreate, startOfLocalDay, type Stop } from "@/lib/api-input";
 import {
-  formatLocal, norm, resolveLocations, resolvePayer, resolveVehicle,
+  formatLocal, looksLikeStreetAddress, norm, resolveLocations, resolvePayer, resolveVehicle,
   type Lookup, type Place, type ResolvedLoc, type LocInput,
 } from "@/lib/resolve";
 
 const isReal = (a: string | null | undefined) => Boolean(a && a.trim() && !/^current location$/i.test(a.trim()));
 
+// The owner is in Alaska. Without this fallback an unset APP_TIMEZONE made "11:30" mean 11:30 UTC
+// (02:30 in Fairbanks) — already past, so the drive looked like it had vanished from "upcoming".
+export const FALLBACK_TIMEZONE = "America/Anchorage";
 export function appTimeZone(): string {
-  return process.env.APP_TIMEZONE || "UTC";
+  return process.env.APP_TIMEZONE || FALLBACK_TIMEZONE;
+}
+
+/** Prisma `where` for "upcoming": enabled, not canceled, departing today (local) or later — or repeating. */
+export function upcomingWhere(timeZone: string = appTimeZone()) {
+  return {
+    isCanceled: false,
+    isEnabled: true,
+    OR: [{ departure: { gte: startOfLocalDay(timeZone) } }, { repeatRule: { not: "NONE" as const } }],
+  };
 }
 
 type RecentSource = {
@@ -61,7 +73,7 @@ export async function loadLookup(): Promise<Lookup & { settings: Awaited<ReturnT
     if (last) { defaultVehicle = byName(last.vehicleName!)!.name; defaultVehicleSource = "vehicle on most recent trip"; }
   }
 
-  const home = saved.find((p) => norm(p.label) === "home");
+  const home = saved.find((p) => norm(p.label) === "home" && looksLikeStreetAddress(p.address));
   return {
     places: saved,
     recents,
@@ -87,7 +99,7 @@ export async function buildContext() {
       select: { id: true, date: true, startAddress: true, endAddress: true, stops: true, distance: true, category: true, paidBy: true, vehicleName: true, notes: true },
     }),
     prisma.scheduledDrive.findMany({
-      where: { isCanceled: false, isEnabled: true, OR: [{ departure: { gte: new Date(now.getTime() - 3600_000) } }, { repeatRule: { not: "NONE" } }] },
+      where: upcomingWhere(),
       orderBy: { departure: "asc" }, take: 20,
       select: { id: true, title: true, startAddress: true, endAddress: true, stops: true, departure: true, scheduledArrival: true, repeatRule: true, category: true, paidBy: true, vehicleName: true },
     }),
@@ -100,7 +112,7 @@ export async function buildContext() {
   return {
     now: now.toISOString(),
     timezone: tz,
-    timezoneWarning: lookup.timezoneIsDefault ? "APP_TIMEZONE is not set on the server; wall-clock times without an offset are interpreted as UTC. Send an explicit `timezone`." : undefined,
+    timezoneWarning: lookup.timezoneIsDefault ? `APP_TIMEZONE is not set on the server; using ${FALLBACK_TIMEZONE}. Set APP_TIMEZONE, or send an explicit \`timezone\`.` : undefined,
     settings: {
       defaultPaidBy: lookup.defaultPaidBy,
       defaultPaidByLabel: resolvePayer(undefined, lookup).label,
@@ -135,8 +147,11 @@ const publicLocs = (r: ResolvedLoc[]) =>
 
 export async function createScheduledDrive(raw: unknown) {
   const lookup = await loadLookup();
-  const data = parseScheduledCreate(raw, { defaultTimeZone: lookup.timezone });
-  const origEnd = data.endAddress;
+  // A missing start defaults to the saved "Home" (only when it has a real street address).
+  const { data, startDefaulted, titleDefaulted } = parseScheduledCreateWithMeta(raw, {
+    defaultTimeZone: lookup.timezone,
+    defaultStart: lookup.homeAddress ?? undefined,
+  });
 
   const locs: LocInput[] = [
     { field: "start", address: data.startAddress, lat: data.startLat, lng: data.startLng },
@@ -151,31 +166,51 @@ export async function createScheduledDrive(raw: unknown) {
   const end = resolved[resolved.length - 1];
   const stopRes = resolved.slice(1, -1);
   const stops: Stop[] | undefined = data.stops ? stopRes.map((r) => ({ address: r.address, lat: r.lat, lng: r.lng })) : undefined;
-  const title = data.title === `Drive to ${origEnd}` ? `Drive to ${end.label ?? end.address}` : data.title;
+  const title = titleDefaulted ? defaultTitle([...stopRes, end]) : data.title;
 
-  const drive = await prisma.scheduledDrive.create({
+  const created = await prisma.scheduledDrive.create({
     data: {
       ...data, title, paidBy: payer.key, vehicleName: vehicle?.name ?? null, stops,
       startAddress: start.address, startLat: start.lat, startLng: start.lng,
       endAddress: end.address, endLat: end.lat, endLng: end.lng,
     },
   });
+  // A 2xx must mean the record exists: read it back before claiming success.
+  const drive = await prisma.scheduledDrive.findUnique({ where: { id: created.id } });
+  if (!drive) throw new ApiError(500, "The scheduled drive was not saved; nothing was created. Please retry.");
 
   const tz = lookup.timezone;
   const departureLocal = formatLocal(drive.departure, tz);
   const arrivalLocal = formatLocal(drive.scheduledArrival, tz);
+  const upcoming = drive.departure >= startOfLocalDay(tz) || drive.repeatRule !== "NONE";
   return {
     ...drive,
+    created: true,
     timezone: tz,
     departureLocal,
     scheduledArrivalLocal: arrivalLocal,
     paidByLabel: payer.label,
     vehicle: vehicle ? { name: vehicle.name, avgMpg: vehicle.avgMpg ?? null } : null,
     resolvedLocations: publicLocs(resolved),
+    defaultsApplied: [
+      ...(startDefaulted ? [`start → ${start.matchedBy === "current_location" ? "Current location" : "Home"}`] : []),
+      ...(data.paidBy ? [] : [`paidBy → ${payer.label}`]),
+      ...(data.vehicleName || !vehicle ? [] : [`vehicle → ${vehicle.name}`]),
+    ],
+    appearsInUpcoming: upcoming,
     summary: `Scheduled "${drive.title}": ${describePlaces(resolved)}, departing ${departureLocal}` +
       (drive.estimatedTravelTime ? `, arriving about ${arrivalLocal}` : "") +
       `. Gas paid by ${payer.label}` + (vehicle ? `; vehicle: ${vehicle.name}` : "") + ".",
   };
+}
+
+function defaultTitle(places: ResolvedLoc[]): string {
+  const names: string[] = [];
+  for (const p of places) {
+    const n = p.label ?? p.address.split(",")[0].trim();
+    if (n && names[names.length - 1] !== n) names.push(n);
+  }
+  return `Drive to ${names.join(", then ")}`;
 }
 
 export async function createTripRecord(raw: unknown, opts: { manual?: boolean } = {}) {
@@ -197,7 +232,7 @@ export async function createTripRecord(raw: unknown, opts: { manual?: boolean } 
   const end = resolved[resolved.length - 1];
   const stops = data.stops ? resolved.slice(1, -1).map((r) => ({ address: r.address, lat: r.lat, lng: r.lng })) : undefined;
 
-  const trip = await prisma.trip.create({
+  const created = await prisma.trip.create({
     data: {
       ...data, paidBy: payer.key, vehicleName: vehicle?.name ?? null,
       vehicleMpg: data.vehicleMpg ?? vehicle?.avgMpg ?? null,
@@ -206,11 +241,14 @@ export async function createTripRecord(raw: unknown, opts: { manual?: boolean } 
       endAddress: end.address, endLat: end.lat, endLng: end.lng,
     } as never,
   });
+  const trip = await prisma.trip.findUnique({ where: { id: created.id } });
+  if (!trip) throw new ApiError(500, "The trip was not saved; nothing was created. Please retry.");
 
   const tz = lookup.timezone;
   const dateLocal = formatLocal(trip.date, tz);
   return {
     ...trip,
+    created: true,
     timezone: tz,
     dateLocal,
     paidByLabel: payer.label,
@@ -227,6 +265,8 @@ export async function resolveNames(names: string[]) {
   return names.map((name) => {
     try {
       const [r] = resolveLocations([{ field: "name", address: name, lat: 0, lng: 0 }], lookup);
+      const real = r.matchedBy === "current_location" || looksLikeStreetAddress(r.address);
+      if (!real) return { input: name, ok: false as const, error: `"${name}" has no real street address`, hint: "Ask the user for the full street address (number, street, city, state).", suggestions: [] };
       return { input: name, ok: true as const, address: r.address, lat: r.lat, lng: r.lng, label: r.label, matchedBy: r.matchedBy };
     } catch (e) {
       const body = (e as { httpBody?: Record<string, unknown> }).httpBody;
