@@ -156,7 +156,9 @@ export function resolveLocation(input: string, lookup: Pick<Lookup, "places" | "
       hits = dedupe(hits);
       if (hits.length === 1) {
         const h = hits[0];
-        if (!looksLikeStreetAddress(h.address)) {
+        // A saved place the user pinned (it has coordinates) is a real location even if its text lacks a state ("3534 Industrial Ave, Fairbanks").
+        const pinned = h.source === "saved_place" && (Boolean(h.lat) || Boolean(h.lng)) && /\d/.test(h.address) && h.address.trim().length > 6;
+        if (!pinned && !looksLikeStreetAddress(h.address)) {
           return { kind: "unresolved", reason: "saved_place_has_no_address", suggestions: suggestionsFor(nq, { places: lookup.places.filter((p) => looksLikeStreetAddress(p.address)), recents }), placeLabel: h.label };
         }
         return { kind: "resolved", address: h.address, lat: h.lat, lng: h.lng, label: h.label, matchedBy: h.source };

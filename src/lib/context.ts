@@ -2,6 +2,7 @@
 // addresses) and uses it to create trips / scheduled drives with no guessing. Shared by the REST
 // routes and the MCP tools. The pure logic lives in ./resolve.ts and ./api-input.ts.
 import { prisma } from "@/lib/db";
+import { fillFromGeocoder, searchCenter, type Geocoder } from "@/lib/geocode";
 import { ApiError, parseScheduledCreateWithMeta, parseTripCreate, startOfLocalDay, type Stop } from "@/lib/api-input";
 import {
   formatLocal, looksLikeStreetAddress, norm, resolveLocations, resolvePayer, resolveVehicle,
@@ -145,6 +146,19 @@ function describePlaces(resolved: ResolvedLoc[]): string {
 const publicLocs = (r: ResolvedLoc[]) =>
   r.map(({ field, input, address, lat, lng, label, matchedBy }) => ({ field, input, address, lat, lng, label, matchedBy }));
 
+/** Resolve names against what is saved; a name that matches nothing saved is looked up on the map near Home before giving up. */
+export async function resolveWithGeocoder(locs: LocInput[], lookup: Awaited<ReturnType<typeof loadLookup>>, geocoder?: Geocoder) {
+  try { return resolveLocations(locs, lookup); }
+  catch (e) {
+    const body = (e as { httpBody?: { details?: { field: string; reason: string }[] } }).httpBody;
+    const lookable = new Set((body?.details ?? []).filter((d) => d.reason === "not_found" || d.reason === "not_a_street_address").map((d) => d.field));
+    if (!body || !lookable.size) throw e;
+    const filled = await fillFromGeocoder(locs, lookable, searchCenter(lookup.places), geocoder);
+    if (filled.every((l, i) => l === locs[i])) throw e;
+    return resolveLocations(filled, lookup);
+  }
+}
+
 export async function createScheduledDrive(raw: unknown) {
   const lookup = await loadLookup();
   // A missing start defaults to the saved "Home" (only when it has a real street address).
@@ -158,7 +172,7 @@ export async function createScheduledDrive(raw: unknown) {
     ...(data.stops ?? []).map((s, i) => ({ field: `stops[${i}]`, address: s.address, lat: s.lat, lng: s.lng })),
     { field: "end", address: data.endAddress, lat: data.endLat, lng: data.endLng },
   ];
-  const resolved = resolveLocations(locs, lookup);
+  const resolved = await resolveWithGeocoder(locs, lookup);
   const payer = resolvePayer(data.paidBy, lookup);
   const vehicle = resolveVehicle(data.vehicleName ?? undefined, lookup);
 
@@ -225,7 +239,7 @@ export async function createTripRecord(raw: unknown, opts: { manual?: boolean } 
     ...(data.stops ?? []).map((s, i) => ({ field: `stops[${i}]`, address: s.address, lat: s.lat, lng: s.lng })),
     { field: "end", address: data.endAddress, lat: data.endLat, lng: data.endLng },
   ];
-  const resolved = resolveLocations(locs, lookup);
+  const resolved = await resolveWithGeocoder(locs, lookup);
   const payer = resolvePayer(data.paidBy, lookup);
   const vehicle = resolveVehicle(data.vehicleName ?? undefined, lookup);
   const start = resolved[0];
@@ -262,10 +276,10 @@ export async function createTripRecord(raw: unknown, opts: { manual?: boolean } 
 /** Dry-run: how would these names resolve? Backs GET /api/resolve and the MCP `resolve_places` tool. */
 export async function resolveNames(names: string[]) {
   const lookup = await loadLookup();
-  return names.map((name) => {
+  return Promise.all(names.map(async (name) => {
     try {
-      const [r] = resolveLocations([{ field: "name", address: name, lat: 0, lng: 0 }], lookup);
-      const real = r.matchedBy === "current_location" || looksLikeStreetAddress(r.address);
+      const [r] = await resolveWithGeocoder([{ field: "name", address: name, lat: 0, lng: 0 }], lookup);
+      const real = r.matchedBy === "current_location" || r.matchedBy === "coordinates" || r.matchedBy === "saved_place" || looksLikeStreetAddress(r.address);
       if (!real) return { input: name, ok: false as const, error: `"${name}" has no real street address`, hint: "Ask the user for the full street address (number, street, city, state).", suggestions: [] };
       return { input: name, ok: true as const, address: r.address, lat: r.lat, lng: r.lng, label: r.label, matchedBy: r.matchedBy };
     } catch (e) {
@@ -273,5 +287,5 @@ export async function resolveNames(names: string[]) {
       if (!body) throw e;
       return { input: name, ok: false as const, error: body.error, hint: body.hint, suggestions: body.suggestions };
     }
-  });
+  }));
 }
