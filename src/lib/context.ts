@@ -3,6 +3,7 @@
 // routes and the MCP tools. The pure logic lives in ./resolve.ts and ./api-input.ts.
 import { prisma } from "@/lib/db";
 import { fillFromGeocoder, searchCenter, type Geocoder } from "@/lib/geocode";
+import { estimateTravelSeconds } from "@/lib/route";
 import { ApiError, parseScheduledCreateWithMeta, parseTripCreate, startOfLocalDay, type Stop } from "@/lib/api-input";
 import {
   formatLocal, looksLikeStreetAddress, norm, resolveLocations, resolvePayer, resolveVehicle,
@@ -182,6 +183,13 @@ export async function createScheduledDrive(raw: unknown) {
   const stops: Stop[] | undefined = data.stops ? stopRes.map((r) => ({ address: r.address, lat: r.lat, lng: r.lng })) : undefined;
   const title = titleDefaulted ? defaultTitle([...stopRes, end]) : data.title;
 
+  // No travel time and no arrival given: estimate the drive, so it does not arrive the moment it leaves.
+  let travelEstimated = false;
+  if (!data.estimatedTravelTime && data.scheduledArrival.getTime() === data.departure.getTime()) {
+    const secs = await estimateTravelSeconds(resolved, lookup.places);
+    if (secs) { data.estimatedTravelTime = secs; data.scheduledArrival = new Date(data.departure.getTime() + secs * 1000); travelEstimated = true; }
+  }
+
   const created = await prisma.scheduledDrive.create({
     data: {
       ...data, title, paidBy: payer.key, vehicleName: vehicle?.name ?? null, stops,
@@ -210,6 +218,7 @@ export async function createScheduledDrive(raw: unknown) {
       ...(startDefaulted ? [`start → ${start.matchedBy === "current_location" ? "Current location" : "Home"}`] : []),
       ...(data.paidBy ? [] : [`paidBy → ${payer.label}`]),
       ...(data.vehicleName || !vehicle ? [] : [`vehicle → ${vehicle.name}`]),
+      ...(travelEstimated ? [`travel time → about ${Math.round(drive.estimatedTravelTime / 60)} min (estimated driving time)`] : []),
     ],
     appearsInUpcoming: upcoming,
     summary: `Scheduled "${drive.title}": ${describePlaces(resolved)}, departing ${departureLocal}` +
